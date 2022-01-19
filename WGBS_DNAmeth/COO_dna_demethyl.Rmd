@@ -212,9 +212,3 @@ dev.off()
 ```
 
 
-```{r vnrui}
-
-DotPlot(tum_spinal, features = c("Dnmt1", "Ezh2"))
-
-
-```
