@@ -1,5 +1,6 @@
 ---
 title: "Mouse ATRT SHH IC"
+author: "Marta Interlandi"
 output: html_document
 ---
 
@@ -47,7 +48,7 @@ metadata <- data.frame(sample = rep("ros1192", ncol(data.matrix)), subgroup = re
 
 
 # Create a Seurat object
-# Keep all cells with at least 100 detected genes
+# Keep all cells with at least 50 detected genes
 ros1192 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
 ros1192
 
@@ -64,7 +65,7 @@ metadata <- data.frame(sample = rep("ros1237", ncol(data.matrix)), subgroup = re
 
 
 # Create a Seurat object
-# Keep all cells with at least 100 detected genes
+# Keep all cells with at least 50 detected genes
 ros1237 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
 ros1237
 
@@ -337,26 +338,7 @@ for(col in group.name){
 ```
 
 
-## Check were previous clusters are found
 
-
-```{r vnfduie}
-
-# Plot old clustering
-
-old.clust <- readRDS("/marta_home/scRNAseq_Ranalysis/ATRT/mouse_combined/immune/CONOS/v2/oldGEMMclusters.rds")
-
-for(c in levels(old.clust)){
-  cellsINcluster <- names(old.clust)[which(old.clust == c)]
-  tiff(paste0("atrt_SHHic_oldClust", c, "_cells.tiff"), width = 900, height = 700)
-  print(DimPlot(object = atrt.integrated, pt.size = 0.8, cells.highlight = cellsINcluster, cols.use = "gray", cols.highlight = "blue", order = cellsINcluster))
-  dev.off()
-}
-
-
-
-
-```
 # Create a table with number of cells by cluster / cell type
 
 ```{r vnfio}
@@ -509,33 +491,6 @@ pheatmap(mean.mat, scale = "row", cluster_rows = F, cluster_cols = F,  annotatio
 ```
 
 
-# Plot markers cancer testis
-
-```{r vnfug}
-
-gene.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/Cancer_testis_antigens_CTdatabase_gene_collection.xlsx")
-
-can.testis <- gene.tab$`Gene family`
-can.testis <- capitalize(tolower(can.testis))
-
-can.testis <- can.testis[can.testis %in% rownames(atrt.integrated)]
-  
-for(mark in can.testis){
-    tiff(paste0("./cancer_testis/", mark, "_feat.tiff"), width = 900, height = 700)
-    print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
-    dev.off()
-}
-
-# Calculate mean value
-
-cancer.testis.mean <- colMeans(atrt.integrated[can.testis,])
-atrt.integrated$cancer.testis.score <- cancer.testis.mean
-
-tiff("./cancer_testis/SHH_cancer_testis_score.tiff", width = 900, height = 700)
-FeaturePlot(atrt.integrated, features = "cancer.testis.score", pt.size = 1, cols = c("yellow", "blue"))
-dev.off()
-```
-
 
 #### Cell cycle scoring
 
@@ -563,70 +518,6 @@ dev.off()
 ```
 
 
-# Create pseudobulk for cibersort
-
-```{r riog}
-tum.clusts <- shh.tumor
-table(tum.clusts$sample)
-
-tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
-max(tum_counts)
-
-colnames(tum_counts) <- tum.clusts$sample
-rownames(tum_counts)[1:5]
-
-mat <- as.data.frame(t(as.matrix(tum_counts)))
-
-mat$sample <- colnames(tum_counts)
-
-sum.mat <- aggregate(. ~ sample, mat, sum)
-
-rownames(sum.mat) <- sum.mat$sample
-
-sum.mat <- sum.mat[,-1]
-sum.mat <- t(as.matrix(sum.mat))
-
-dim(sum.mat)
-rownames(sum.mat)
-tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
-
-tum_mat[1:5,]
-
-write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/SHH_ic_bulk.txt",
-            quote = FALSE, sep = "\t", row.names = F, col.names = T)
-
-### Clusterwise
-table(tum.clusts$seurat_clusters)
-
-tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
-max(tum_counts)
-
-colnames(tum_counts) <- tum.clusts$seurat_clusters
-rownames(tum_counts)[1:5]
-
-mat <- as.data.frame(t(as.matrix(tum_counts)))
-
-mat$clust <- colnames(tum_counts)
-
-sum.mat <- aggregate(. ~ clust, mat, sum)
-
-rownames(sum.mat) <- sum.mat$clust
-
-sum.mat <- sum.mat[,-1]
-sum.mat <- t(as.matrix(sum.mat))
-
-dim(sum.mat)
-rownames(sum.mat)
-tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
-
-tum_mat[1:5,]
-
-write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/SHH_ic_bulk_clust.txt",
-            quote = FALSE, sep = "\t", row.names = F, col.names = T)
-
-```
-
-
 # Dotplot stromal markers tumor vs tme
 
 
@@ -648,7 +539,7 @@ stromal.mark <- unlist(stromal.mark)
 stromal.mark <- capitalize(tolower(stromal.mark))
 stromal.mark <- stromal.mark[stromal.mark %in% rownames(atrt.integrated)]
 
-# Add Smarcb1 for reviewer
+# Add Smarcb1 
 stromal.mark <- c("Smarcb1", stromal.mark)
 
 
@@ -665,10 +556,5 @@ atrt.integrated$pheno <- as.factor(pheno)
 pdf("SHH_IC_dotplot_stromal_TUMvsTME.pdf")
 DotPlot(atrt.integrated, features = stromal.mark, group.by = "pheno", dot.scale = 10) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15)) 
 dev.off()
-```
-
-## Save preprocessed data 
-```{r}
-saveRDS(atrt.integrated, file = "/marta_home/GEO_COO/single_cell/SHH_IC_integrated_seurat_obj.rds")
 ```
 

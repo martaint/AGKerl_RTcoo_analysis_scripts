@@ -1,5 +1,6 @@
 ---
 title: "Comparison tumor clusters MYC"
+author: "Marta Interlandi"
 output: html_document
 ---
 

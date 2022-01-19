@@ -1,5 +1,6 @@
 ---
 title: "mouse tumors together plotting markers"
+author: "Marta Interlandi"
 output: html_document
 ---
 
@@ -543,47 +544,3 @@ dev.off()
 
 ```
 
-# Plot urgent markers
-
-```{r gnui}
-
-urgent.markers <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/urgent_markers.xlsx")
-
-genes <- as.character(unlist(urgent.markers$RT))
-
-for (g in genes){
-  p1 <- tryCatch(
-  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
-  error=function(cond){
-    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
-    return(p)
-  }
-)
-  p2 <- tryCatch(
-  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
-  error=function(cond){
-    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
-    return(p)
-  }
-)
-  p3 <- tryCatch(
-  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
-  error=function(cond){
-    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
-    return(p)
-  }
-)
-  p4 <- tryCatch(
-  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
-  error=function(cond){
-    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
-    return(p)
-  }
-)
-
-  tiff(paste0("./urgent_markers/RT_mou_",g, ".tiff"), width = 1200, height = 800)
-  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
-  dev.off()
-}
-
-```

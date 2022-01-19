@@ -1,5 +1,6 @@
 ---
 title: "Mouse ATRT MYC spinal"
+author: "Marta Interlandi"
 output: html_document
 ---
 
@@ -49,7 +50,7 @@ metadata <- data.frame(sample = rep("ros1172", ncol(data.matrix)), subgroup = re
 
 
 # Create a Seurat object
-# Keep all cells with at least 100 detected genes
+# Keep all cells with at least 50 detected genes
 ros1172 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
 ros1172
 
@@ -67,7 +68,7 @@ metadata <- data.frame(sample = rep("ros1177", ncol(data.matrix)), subgroup = re
 
 
 # Create a Seurat object
-# Keep all cells with at least 100 detected genes
+# Keep all cells with at least 50 detected genes
 ros1177 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
 ros1177
 
@@ -85,7 +86,7 @@ metadata <- data.frame(sample = rep("ros1232", ncol(data.matrix)), subgroup = re
 
 
 # Create a Seurat object
-# Keep all cells with at least 100 detected genes
+# Keep all cells with at least 50 detected genes
 ros1232 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
 ros1232
 
@@ -471,76 +472,7 @@ for(mark in pgc.mark){
 
 ```
 
-# Trying markers for perineural invasion by PNS cells
 
-```{r vmfidg}
-##Gene genes associated to angiogenesis and axonogenesis
-ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
-
-# Get mouse genes associated to angiogenesis and child terms
-angio.genes.go <- getBM(attributes=c('mgi_symbol'),
-                        filters = 'go', values = 'GO:0001525', mart = ensembl)
-
-
-# this list is too big to be plotted: trying with msigDBgenesets
-angio.geneset <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/angiogenesis_geneset.txt", skip = 2)
-angio.geneset <- capitalize(tolower(as.character(angio.geneset$V1)))
-
-axono.geneset <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/axonogenesis_geneset.txt", skip = 2)
-axono.geneset <- capitalize(tolower(as.character(axono.geneset$V1)))
-
-angio.geneset <- angio.geneset[angio.geneset %in% rownames(atrt.integrated)]
-axono.geneset <- axono.geneset[axono.geneset %in% rownames(atrt.integrated)]
-
-for(mark in angio.geneset){
-  tiff(paste0("./angiogenesis_markers/", mark, "_feat.tiff"), width = 900, height = 700)
-  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
-  dev.off()
-}
-
-for(mark in axono.geneset){
-  tiff(paste0("./axonogenesis_markers/", mark, "_feat.tiff"), width = 900, height = 700)
-  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
-  dev.off()
-}
-
-
-FeaturePlot(atrt.integrated, features = c("Cd3d", "Cd8a", "Fcgr3a"), pt.size = 1, cols = c("gray", "blue"), order = T)
-
-
-# gonadal endothelial markers
-gon.endo <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/gonadal_endothelial_markers.txt", sep = ",")
-gon.endo <- trimws(as.character(unlist(gon.endo[1,])))
-
-gon.endo <- gon.endo[gon.endo != "NA"]
-gon.endo <- capitalize(tolower(gon.endo))
-gon.endo <- gon.endo[gon.endo %in% rownames(atrt.integrated)]
-
-mat <- GetAssayData(atrt.integrated, slot = "data")
-dim(mat)
-mat <- mat[gon.endo, ]
-dim(mat)
-
-atrt.integrated$mean_gonadal_endoth <- colMeans(as.matrix(mat))
-
-tiff("MYC_EC_gonadal_markers_feat.tiff", width = 900, height = 700)
-FeaturePlot(atrt.integrated, features = "mean_gonadal_endoth", pt.size = 1, cols = c("gray", "blue"), order = T)
-dev.off()
-
-gon.endo.100 <- sample(gon.endo, 100, replace = F)
-
-for(mark in gon.endo.100){
-  tiff(paste0("./gonadal_endothelial_markers/", mark, "_feat.tiff"), width = 900, height = 700)
-  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
-  dev.off()
-}
-
-
-```  
-
-
-
-                   
 
 ## DE analysis only tumors
 
@@ -825,67 +757,7 @@ dev.off()
 ```
 
 
-# Create pseudobulk for cibersort
 
-```{r riog}
-table(tum.clusts$sample)
-
-tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
-max(tum_counts)
-
-colnames(tum_counts) <- tum.clusts$sample
-rownames(tum_counts)[1:5]
-
-mat <- as.data.frame(t(as.matrix(tum_counts)))
-
-mat$sample <- colnames(tum_counts)
-
-sum.mat <- aggregate(. ~ sample, mat, sum)
-
-rownames(sum.mat) <- sum.mat$sample
-
-sum.mat <- sum.mat[,-1]
-sum.mat <- t(as.matrix(sum.mat))
-
-dim(sum.mat)
-rownames(sum.mat)
-tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
-
-tum_mat[1:5,]
-
-write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/MYC_spin_bulk.txt",
-            quote = FALSE, sep = "\t", row.names = F, col.names = T)
-
-### Clusterwise
-table(tum.clusts$new_clustering)
-
-tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
-max(tum_counts)
-
-colnames(tum_counts) <- tum.clusts$new_clustering
-rownames(tum_counts)[1:5]
-
-mat <- as.data.frame(t(as.matrix(tum_counts)))
-
-mat$clust <- colnames(tum_counts)
-
-sum.mat <- aggregate(. ~ clust, mat, sum)
-
-rownames(sum.mat) <- sum.mat$clust
-
-sum.mat <- sum.mat[,-1]
-sum.mat <- t(as.matrix(sum.mat))
-
-dim(sum.mat)
-rownames(sum.mat)
-tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
-
-tum_mat[1:5,]
-
-write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/MYC_spin_bulk_clust.txt",
-            quote = FALSE, sep = "\t", row.names = F, col.names = T)
-
-```
 
 # Dotplot stromal markers tumor vs tme
 
@@ -913,7 +785,3 @@ DotPlot(atrt.integrated, features = stromal.mark, group.by = "pheno", dot.scale 
 dev.off()
 ```
 
-## Save preprocessed data 
-```{r}
-saveRDS(atrt.integrated, file = "/marta_home/GEO_COO/single_cell/MYC_spinal_integrated_seurat_obj.rds")
-```
