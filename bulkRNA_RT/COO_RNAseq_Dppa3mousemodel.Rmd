@@ -1,0 +1,349 @@
+---
+title: "Analysis mouse tumors from Dppa3 model (PGCs)"
+author: "Marta Interlandi"
+date: "9/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(GEOquery)
+library(DESeq2)
+library(biomaRt)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(Rsubread)
+
+setwd("/marta_home/RNAseq/COOrevision/R")
+load("/marta_home/RNAseq/COOrevision/R/workspace.RData")
+```
+
+# Description
+
+
+```{r gnruig}
+gse <- getGEO("GSE137633")
+
+show(gse)
+
+coldata <- pData(phenoData(gse[[1]]))
+
+# read raw count matrices
+files <- list.files("/marta_home/RNAseq/RNAseqPUB/mouseRT_Bourdeaut/GSE137633_RAW", full.names = T)
+
+samples <- list.files("/marta_home/RNAseq/RNAseqPUB/mouseRT_Bourdeaut/GSE137633_RAW")
+samples <- unlist(lapply(samples, function(x) strsplit(x, "_")[[1]][1]))
+
+tab <- read.table(files[1], row.names = 1)
+head(tab)
+colnames(tab) <- samples[1]
+
+for(i in 2:length(files)){
+  t <- read.table(file = files[i], row.names = 1)
+  colnames(t) <- samples[i]
+  tab <- cbind(tab, t)
+}
+
+head(tab)
+
+# Create a DESEQ2 object
+mat <- as.matrix(tab)
+
+coldata <- coldata[, c("title", "source_name_ch1")]
+all(rownames(coldata) == colnames(mat))
+
+dds <- DESeqDataSetFromMatrix(countData = mat,
+                              colData = coldata,
+                              design = ~ source_name_ch1)
+dds
+
+
+```
+
+# Data visualization
+
+```{r mfgiut}
+vsd <- vst(dds, blind=FALSE)
+
+sampleDists <- dist(t(assay(vsd)))
+
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- vsd$title
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+tiff("./heatmap_sample_distances.tiff", width = 700, height = 500)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+
+pcaData <- plotPCA(vsd, intgroup=c("source_name_ch1"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+tiff("./PCA_conditions.tiff", width = 700, height = 500)
+ggplot(pcaData, aes(PC1, PC2, color=source_name_ch1)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+dev.off()
+```
+
+
+## Our mouse Dppaini samples
+# Counting mapped reads
+
+```{r vnrioh}
+
+dpp43_feat_count_out_ens <- featureCounts(files = "/marta_home/RNAseq/in-house/COO/STAR_out/25_Dppaini_43_Natalia_Moreno_Kerl_S25_Aligned.sortedByCoord.out.bam", annot.ext = "/marta_home/RNAseq/genome/ensembl/Mus_musculus.GRCm39.104.gtf", isGTFAnnotationFile = T)
+
+dpp7_feat_count_out_ens <- featureCounts(files = "/marta_home/RNAseq/in-house/COO/STAR_out/26_Dppaini_7_Natalia_Moreno_Kerl_S26_Aligned.sortedByCoord.out.bam", annot.ext = "/marta_home/RNAseq/genome/ensembl/Mus_musculus.GRCm39.104.gtf", isGTFAnnotationFile = T)
+
+##create matrix 
+
+dpp_mat <- as.matrix(data.frame(dpp43 = dpp43_feat_count_out_ens$counts, dpp7 = dpp7_feat_count_out_ens$counts))
+colnames(dpp_mat) <- c("dpp43", "dpp7")
+
+# Save txt file for GEO
+dpp_mat_geo <- as.matrix(data.frame(dpp7 = dpp7_feat_count_out_ens$counts, dpp43 = dpp43_feat_count_out_ens$counts))
+colnames(dpp_mat_geo) <- c("dppa3-cre_Smarcb1_tumor1", "dppa3-cre_Smarcb1_tumor2")
+
+write.table(dpp_mat_geo, file = "/marta_home/GEO_COO/bulkRNA/raw_gene_counts_matrix.txt", sep = "\t", row.names = T, quote = F)
+
+ens_split_names <- unlist(lapply(strsplit(rownames(mat), split = "\\."), function(x) x[[1]]))
+
+rownames(mat) <- ens_split_names
+gene2keep <- intersect(ens_split_names, rownames(dpp_mat))
+
+merged <- cbind(mat[gene2keep,], dpp_mat[gene2keep,])
+
+coldata_merged <- coldata %>%
+  add_row(title = "dpp43", source_name_ch1 = "dppaini") %>%
+  add_row(title = "dpp7", source_name_ch1 = "dppaini")
+
+rownames(coldata_merged) <- c(rownames(coldata), "dpp43", "dpp7")
+
+dds_merged <- DESeqDataSetFromMatrix(countData = merged,
+                              colData = coldata_merged,
+                              design = ~ source_name_ch1)
+dds_merged
+
+# removing genes with 0 counts
+nrow(dds_merged)
+
+keep <- rowSums(counts(dds_merged)) > 1
+dds_merged <- dds_merged[keep,]
+nrow(dds_merged)
+
+
+library(vsn)
+meanSdPlot(log2(dpp_mat + 1), ranks = F)
+meanSdPlot(log2(mat +1), ranks = F)
+```
+
+
+# Data visualization
+
+```{r mfgiut}
+vsd_merged <- vst(dds_merged, blind=FALSE)
+
+rld_merged <- rlog(dds_merged, blind = FALSE)
+
+#sampleDists <- dist(t(assay(vsd_merged)))
+sampleDists <- as.dist(1- cor(assay(vsd_merged)))
+
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- vsd_merged$title
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+tiff("./heatmap_sample_distances_Dppaini_vst_cor.tiff", width = 700, height = 500)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+
+###rlog
+sampleDists <- as.dist(1- cor(assay(rld_merged)))
+
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- rld_merged$title
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+tiff("./heatmap_sample_distances_Dppaini_rlog_cor.tiff", width = 700, height = 500)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+
+pcaData <- plotPCA(vsd_merged, intgroup=c("source_name_ch1"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+tiff("./PCA_conditions_Dppaini.tiff", width = 700, height = 500)
+ggplot(pcaData, aes(PC1, PC2, color=source_name_ch1)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+dev.off()
+```
+
+## Map ensembl genes to gene symbols
+
+```{r vnrufig}
+
+# Convert names
+# Map the Emsembl ID (ENSMUSG00000036958) to gene_symbol with Biomart
+mart <- useMart(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+#listDatasets(mart)
+#listAttributes(mart)
+mapping <- getBM(attributes=c("ensembl_gene_id", "mgi_symbol"),
+                 mart=mart)
+rownames(dds_merged)
+
+gene_symb_rownames <- mapping[match(rownames(dds_merged), mapping$ensembl_gene_id), "mgi_symbol"]
+
+# remove empty values
+nrow(dds_merged)
+dds_merged <- dds_merged[!(gene_symb_rownames == ""),]
+gene_symb_rownames <- gene_symb_rownames[!(gene_symb_rownames == "")]
+dds_merged <- dds_merged[!(duplicated(gene_symb_rownames)),]
+gene_symb_rownames <- gene_symb_rownames[!(duplicated(gene_symb_rownames))]
+
+rownames(dds_merged) <- gene_symb_rownames
+
+vsd_merged_gene <- vst(dds_merged, blind=FALSE)
+
+table(vsd_merged_gene$source_name_ch1)
+ncol(vsd_merged_gene)
+vsd_merged_gene_sub <- vsd_merged_gene[, !(vsd_merged_gene$source_name_ch1 %in% c("Healthy brain", "Syngeneic graft of tumor into flank"))]
+
+ncol(vsd_merged_gene_sub)
+## Save rds file
+saveRDS(vsd_merged_gene_sub, "/marta_home/GEO_COO/bulkRNA/deseq2_vsd_mergedDpp_mouse.rds")
+```
+
+
+# Boxplot marker genes
+
+```{r fnrugi}
+boxplot.GGplot <- function(genes, exprSet, condition, title){
+  
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(exprSet)))))
+  value <- as.vector(t(assay(exprSet)[genes,]))
+  df.boxplot <- data.frame(gene , value, condition)
+  df.boxplot$gene <- factor(df.boxplot$gene, levels = genes)
+
+  p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Normalized gene expression") +
+    scale_x_discrete(name = "Gene") +
+    ggtitle(title) +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 12))
+  
+    #scale_fill_manual(values=c("#FF0000FF", "orange"))
+    #scale_fill_brewer(palette = "Accent")
+  return(p)
+} 
+subgroup.markers <- read_excel("/marta_home/microarray/Natalia/revisionCOO/Boxplots ATRT subgroup markers.xlsx")
+
+shh.markers <- capitalize(tolower(subgroup.markers$`ATRT-SHH`))
+shh.markers <- shh.markers[shh.markers %in% rownames(vsd_merged_gene)]
+
+tiff("boxplots_SHH_markers.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = shh.markers, exprSet = vsd_merged_gene, condition = vsd_merged_gene$source_name_ch1, title = "Markers for ATRT-SHH") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+myc.markers <- capitalize(tolower(subgroup.markers$`ATRT-MYC`))
+myc.markers <- unique(myc.markers[myc.markers %in% rownames(vsd_merged_gene)])
+
+tiff("boxplots_MYC_markers.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = myc.markers, exprSet = vsd_merged_gene, condition = vsd_merged_gene$source_name_ch1, title = "Markers for ATRT-MYC") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+
+tyr.markers <- capitalize(tolower(subgroup.markers$`ATRT-TYR`))
+tyr.markers <- unique(tyr.markers[tyr.markers %in% rownames(vsd_merged_gene)])
+
+tiff("boxplots_TYR_markers.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = tyr.markers, exprSet = vsd_merged_gene, condition = vsd_merged_gene$source_name_ch1, title = "Markers for ATRT-TYR") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+
+
+## Boxplots without healthy brain and grafts
+tiff("boxplots_SHH_markers_subset.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = shh.markers, exprSet = vsd_merged_gene_sub, condition = vsd_merged_gene_sub$source_name_ch1, title = "Markers for ATRT-SHH") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+tiff("boxplots_MYC_markers_subset.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = myc.markers, exprSet = vsd_merged_gene_sub, condition = vsd_merged_gene_sub$source_name_ch1, title = "Markers for ATRT-MYC") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+tiff("boxplots_TYR_markers_subset.tiff", width = 900, height = 500)
+plot(boxplot.GGplot(genes = tyr.markers, exprSet = vsd_merged_gene_sub, condition = vsd_merged_gene_sub$source_name_ch1, title = "Markers for ATRT-TYR") +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+)
+dev.off()
+
+
+## Correlation based on markers
+subgroup.markers <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/Subgroup_Marker_Johan.xlsx", skip = 1)
+
+markers.all <- capitalize(tolower(c(subgroup.markers$TYR, subgroup.markers$MYC, subgroup.markers$SHH)))
+
+markers.all <- markers.all[markers.all %in% rownames(vsd_merged_gene_sub)]
+
+
+sampleDists <- as.dist(1- cor(assay(vsd_merged_gene_sub[markers.all,])))
+
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- vsd_merged_gene_sub$title
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+tiff("./heatmap_sample_distances_Dppaini_markers.tiff", width = 700, height = 500)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+dev.off()
+
+write.csv(data.frame(subgroup_markers = markers.all), file = "Subgroup_markers_for_correlation.csv", row.names = F)
+```

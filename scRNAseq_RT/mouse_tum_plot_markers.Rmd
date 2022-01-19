@@ -1,0 +1,589 @@
+---
+title: "mouse tumors together plotting markers"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+library(pheatmap)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/plotting_tum_mark")
+
+```
+
+#Load datasets
+
+```{r vfdogu}
+
+shh.obj <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_SHH/shh_ic_seuobj.rds")
+
+myc.ic.obj <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_seuobj.rds")
+
+myc.ec.obj <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_seuobj.rds")
+
+myc.spin.obj <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_seuobj.rds")
+
+DefaultAssay(shh.obj) <- "RNA"
+DefaultAssay(myc.ic.obj) <- "RNA"
+DefaultAssay(myc.ec.obj) <- "RNA"
+DefaultAssay(myc.spin.obj) <- "RNA"
+
+shh.obj$NA_feat <- rep(0,ncol(shh.obj))
+myc.ic.obj$NA_feat <- rep(0,ncol(myc.ic.obj))
+myc.ec.obj$NA_feat <- rep(0,ncol(myc.ec.obj))
+myc.spin.obj$NA_feat <- rep(0,ncol(myc.spin.obj))
+
+
+```
+
+# DE SHH vs MYC IC
+
+```{r rnguri}
+table(shh.obj$CellType)
+tumor.shh <- subset(shh.obj, subset = CellType == "Tumor_SHH")
+
+table(myc.ic.obj$CellType)
+tumor.myc.ic <- subset(myc.ic.obj, subset = CellType == "Tumor_MYC_IC")
+
+merged.data <- merge(tumor.myc.ic, tumor.shh)
+
+Idents(merged.data) <- merged.data$CellType
+
+markers <- FindMarkers(merged.data, ident.1 = "Tumor_SHH", test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = "./COO_revision_DEtumSHHvstumMYCIC_sc.xlsx", row.names = T)
+
+1864/nrow(merged.data)
+```
+
+
+
+#Plot markers
+
+
+```{r niou}
+markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/subgroup_specific_MYC_markers.xlsx")
+
+myc.ic.genes <- markers.tab$`MYC IC unique`[!is.na(markers.tab$`MYC IC unique`)]
+myc.ec.genes <- markers.tab$`MYC EC unique`[!is.na(markers.tab$`MYC EC unique`)]
+myc.spin.genes <- markers.tab$`MYC SPINAL unique`[!is.na(markers.tab$`MYC SPINAL unique`)]
+
+for (g in myc.ic.genes){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./MYC_IC_unique_genes/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+
+for (g in myc.ec.genes){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./MYC_EC_unique_genes/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+
+for (g in myc.spin.genes){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./MYC_spinal_unique_genes/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+```
+
+
+
+## Plot selected markers
+
+
+```{r sel}
+#markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/gene selection for Tu subgroup spec mark_Violin plot.xlsx", skip = 1)
+markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/genes_violin_tumor_updated.xlsx", skip = 1)
+
+mark.all <- as.character(unlist(markers.tab))
+mark.all <- mark.all[!is.na(mark.all)]
+
+## Violin plot
+shh.tum <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_SHH/shh_tumor_cells.rds")
+
+DefaultAssay(shh.tum) <- "RNA"
+shh.tum$subgroup <- "SHH-IC"
+
+myc.ic.tum <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_tumor_cells.rds")
+
+DefaultAssay(myc.ic.tum) <- "RNA"
+myc.ic.tum$subgroup <- "MYC-IC"
+
+myc.ec.tum <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+
+DefaultAssay(myc.ec.tum) <- "RNA"
+myc.ec.tum$subgroup <- "MYC-EC"
+
+myc.spin.tum <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+
+DefaultAssay(myc.spin.tum) <- "RNA"
+myc.spin.tum$subgroup <- "MYC-SPINAL"
+ 
+
+# Merge subgroups together
+tum.merged <- merge(shh.tum, list(myc.ec.tum, myc.ic.tum, myc.spin.tum), merge.data = T)
+
+table(tum.merged$subgroup)
+
+mark.all %in% rownames(tum.merged)
+
+mat <- GetAssayData(tum.merged)
+mat <- mat[mark.all,]
+dim(mat)
+
+write.table(as.matrix(mat), file = "tumor_subgroups4vln.txt", sep = "\t", quote = F,row.names = T, col.names = T)
+write.table(tum.merged$subgroup, file = "tumor_subgroup_ann.txt", sep = "\t", quote = F, col.names = T)
+
+# UMAP single markers
+mark.all <- "Dnmt3b"
+for (g in mark.all){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) 
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) 
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) 
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8)
+    return(p)
+  }
+)
+
+  png(paste0("./selected_genes/",g, "_all_feat_sepL.png"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = NULL))
+  dev.off()
+  
+  tiff(paste0("./selected_genes/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = 'right'))
+  dev.off()
+}
+
+
+
+```
+
+
+## Plot markers of stromal cells (MYC spinal and EC)
+
+
+```{r sel}
+markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/marker genes for distinct tumor stroma cell types.xlsx")
+
+gene.categ <- colnames(markers.tab)
+
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(markers.tab[, cat]))))
+  genes <- genes[!is.na(genes)]
+  
+  for (g in genes){
+  
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) 
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8, cols = c("lightgrey", "gray8")),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8)
+    return(p)
+  }
+)
+
+  tiff(paste0("./stromal_markers/",cat, "_", g, ".tiff"), width = 1000, height = 800)
+  print(CombinePlots(list(p3,p4), ncol = 2, legend = NULL))
+  dev.off()
+  
+  
+  }
+  
+}
+
+
+
+
+
+
+
+
+```
+
+
+
+#Plot markers from PGCs DElists
+
+
+```{r niou}
+fold <- "/marta_home/scRNAseq_Ranalysis/Seurat_v3/trajectories/PGCs"
+mar.files <- list.files(path = fold, pattern = "Marioni_markers",full.names = T)
+
+for(f in mar.files){
+  time.point <- sub(x = unlist(strsplit(f, "_"))[6], pattern = ".xlsx", replacement = "")
+  markers.tab <- read_xlsx(f)
+  markers.tab <- markers.tab[markers.tab$avg_logFC > 0, ]
+  if(nrow(markers.tab) < 15) {
+    genes <- markers.tab$...1
+  } else {
+    genes <- markers.tab$...1[1:15]
+  }
+  for(g in genes){
+      plotMarkersMYCsubgroup(g, time.point)
+  }
+}
+
+plotMarkersMYCsubgroup <- function(g, time.point){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./PGCsMarkers_inTumors/", time.point, "_", g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+
+cao.files <- list.files(path = fold, pattern = "Cao_PGC_marker",full.names = T)
+for(f in cao.files){
+  time.point <- sub(x = unlist(strsplit(f, "_"))[7], pattern = ".xlsx", replacement = "")
+  markers.tab <- read_xlsx(f)
+  markers.tab <- markers.tab[markers.tab$avg_logFC > 0, ]
+  if(nrow(markers.tab) < 15) {
+    genes <- markers.tab$...1
+  } else {
+    genes <- markers.tab$...1[1:15]
+  }
+  for(g in genes){
+      plotMarkersMYCsubgroup(g, time.point)
+  }
+}
+
+
+```
+
+
+## Plot epigenetic markers
+
+```{r cnoasu}
+epi.genes <- c("Dnmt3l", "Tet1", "Uhrf1", "Kdm6a", "Dnmt1", "Dnmt3a", "Ezh2")
+
+for (g in epi.genes){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./epigenetic_markers/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+
+epi.genes2 <- c("Dnmt3l", "Tet1", "Uhrf1", "Kdm6a", 'Tet2', 'Tet3', 'Prmt1', 'Prmt5', 'Ehmt2', 'Ogg1', 'Kdm1a', 'Kdm4a', 'Padi4', 'Dot1l')
+
+for (g in epi.genes2){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./epigenetic_markers/",g, "_all_feat.tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+```
+
+
+## DNA demethylase markers
+
+```{r vnfug}
+
+markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/demethyl_genes.xlsx")
+
+gene.categ <- colnames(markers.tab)
+
+
+genes <- capitalize(tolower(as.character(unlist(markers.tab[, gene.categ]))))
+genes <- genes[!is.na(genes)]
+
+for (g in genes){
+  p2 <- tryCatch(
+    FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+    error=function(cond){
+      p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+      return(p)
+    }
+  )
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+  )
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+tiff(paste0("./demethylation/",gene.categ, "_", g, ".tiff"), width = 1000, height = 800)
+print(CombinePlots(list(p2,p3,p4), ncol = 2, legend = NULL))
+dev.off()
+
+
+}
+
+
+
+
+
+
+
+
+
+
+```
+
+# Plot urgent markers
+
+```{r gnui}
+
+urgent.markers <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/urgent_markers.xlsx")
+
+genes <- as.character(unlist(urgent.markers$RT))
+
+for (g in genes){
+  p1 <- tryCatch(
+  FeaturePlot(shh.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(shh.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p2 <- tryCatch(
+  FeaturePlot(myc.ic.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ic.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p3 <- tryCatch(
+  FeaturePlot(myc.ec.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.ec.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+  p4 <- tryCatch(
+  FeaturePlot(myc.spin.obj, features = g, order = T, pt.size = 0.8),
+  error=function(cond){
+    p <- FeaturePlot(myc.spin.obj, features = "NA_feat", pt.size = 0.8) + theme(legend.position = "none")
+    return(p)
+  }
+)
+
+  tiff(paste0("./urgent_markers/RT_mou_",g, ".tiff"), width = 1200, height = 800)
+  print(CombinePlots(list(p1,p2,p3,p4), ncol = 2, legend = "right"))
+  dev.off()
+}
+
+```

@@ -1,0 +1,126 @@
+---
+title: "PGCs aligned with Seurat"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(monocle3)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/PGCs_aligned")
+
+
+#load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/trajectories/PGCs/workspace.RData")
+```
+
+
+# Load data
+
+```{r cnug}
+
+# PGCs from Marioni
+pgc.marioni <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Marioni/full_marioni_integrated_PGCs.rds")
+pgc.marioni$sample <- "PGC_marioni"
+# PGCs from Cao
+pgc.cao <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Cao/Cao_PGCs.rds")
+pgc.cao$sample <- "PGC_cao"
+pgc.cao$stage <- pgc.cao$day
+
+pgc.list <- list(pgc.marioni, pgc.cao)
+
+# Integration 
+anchors <- FindIntegrationAnchors(object.list = pgc.list, dims = 1:30, k.filter = 150)
+
+features.intersection <- c(Reduce(intersect, lapply(anchors@object.list, rownames)))
+pgc.integrated <- IntegrateData(anchorset = anchors, features.to.integrate = features.intersection)
+
+
+```
+
+# Plot UMAP
+
+```{r cdi}
+
+pgc.integrated <- ScaleData(pgc.integrated)
+pgc.integrated <- RunPCA(pgc.integrated)
+pgc.integrated <- RunUMAP(pgc.integrated, dims = 1:30)
+
+
+tiff("PGCs_integrated_sample.tiff", width = 800, height = 600)
+DimPlot(pgc.integrated, group.by = "sample", pt.size = 1.2)
+dev.off()
+
+tiff("PGCs_integrated_timepoint.tiff", width = 800, height = 600)
+DimPlot(pgc.integrated, group.by = "stage", pt.size = 1.2)
+dev.off()
+
+
+```
+
+
+# Add MYC samples
+
+```{r dfo}
+# MYC spinal
+myc.spinal <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+myc.spinal$sample <- "MYC_spinal"
+
+myc.list <- list(pgc.marioni, pgc.cao, myc.spinal)
+
+anchors <- FindIntegrationAnchors(object.list = myc.list, dims = 1:30, k.filter = 150)
+features.intersection <- c(Reduce(intersect, lapply(anchors@object.list, rownames)))
+pgc.myc.integrated <- IntegrateData(anchorset = anchors, features.to.integrate = features.intersection)
+
+
+pgc.myc.integrated <- ScaleData(pgc.myc.integrated)
+pgc.myc.integrated <- RunPCA(pgc.myc.integrated)
+pgc.myc.integrated <- RunUMAP(pgc.myc.integrated, dims = 1:30)
+
+
+tiff("PGCs_MYCspin_integrated_sample.tiff", width = 800, height = 600)
+DimPlot(pgc.myc.integrated, group.by = "sample", pt.size = 1.2)
+dev.off()
+
+tiff("PGCs_MYCspin_integrated_timepoint.tiff", width = 800, height = 600)
+DimPlot(pgc.myc.integrated, group.by = "stage", pt.size = 1.2)
+dev.off()
+
+
+# MYC ec
+myc.ec <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+
+myc.ec$sample <- "MYC_ec"
+
+myc.list <- list(pgc.marioni, pgc.cao, myc.ec)
+
+anchors <- FindIntegrationAnchors(object.list = myc.list, dims = 1:30, k.filter = 150)
+features.intersection <- c(Reduce(intersect, lapply(anchors@object.list, rownames)))
+pgc.myc.integrated <- IntegrateData(anchorset = anchors, features.to.integrate = features.intersection)
+
+
+pgc.myc.integrated <- ScaleData(pgc.myc.integrated)
+pgc.myc.integrated <- RunPCA(pgc.myc.integrated)
+pgc.myc.integrated <- RunUMAP(pgc.myc.integrated, dims = 1:10)
+
+
+tiff("PGCs_MYCec_integrated_sample.tiff", width = 800, height = 600)
+DimPlot(pgc.myc.integrated, group.by = "sample", pt.size = 1.2)
+dev.off()
+
+tiff("PGCs_MYCec_integrated_timepoint.tiff", width = 800, height = 600)
+DimPlot(pgc.myc.integrated, group.by = "stage", pt.size = 1.2)
+dev.off()
+
+```

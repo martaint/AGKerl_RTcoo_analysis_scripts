@@ -1,0 +1,220 @@
+---
+title: "DNA demethylation genes in Tumors + PGCs"
+author: "Marta Interlandi"
+date: "4/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+library(pheatmap)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/DNA_demethyl/")
+load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/DNA_demethyl/workspace.RData")
+```
+
+
+#Load datasets
+
+```{r vfdogu}
+
+tum_myc_ic <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_tumor_cells.rds")
+tum_myc_ec <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+tum_spinal <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+tum_shh <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_SHH/shh_tumor_cells.rds")
+
+# assign subgroup
+tum_myc_ic$subgroup <- "MYC_IC"
+tum_myc_ec$subgroup <- "MYC_EC"
+tum_spinal$subgroup <- "MYC_spinal"
+tum_shh$subgroup <- "SHH_IC"
+
+
+
+# PGCs from Marioni
+pgc.marioni <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Marioni/full_marioni_integrated_PGCs.rds")
+
+DefaultAssay(pgc.marioni) <- "RNA"
+
+pgc.marioni$subgroup <- "PGC"
+
+# PGCs from Chloe
+pgc.chloe <- read.csv("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/Data_Pgcs_Raw_Counts/raw_counts_matrix_pgcs.csv")
+
+chloe.metadata <- read.csv("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/Data_Pgcs_Raw_Counts/meta.data_no_adrenal.csv", stringsAsFactors = F)
+table(chloe.metadata$orig)
+head(pgc.chloe)
+
+# rename genes with gene-name
+ens.genes <- colnames(pgc.chloe)[-1]
+ens.genes <- unlist(lapply(strsplit(ens.genes, "\\."), function(x) x[[1]]))
+# 10x mapping ensembl / gene names
+g10x <- read.table("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/genes.tsv")
+
+
+# cell names
+cell.names <- pgc.chloe$index
+chloe.mat <- t(pgc.chloe[, -1])
+rownames(chloe.mat) <- g10x[match(ens.genes, g10x$V1), "V2"]
+chloe.mat <- chloe.mat[!is.na(rownames(chloe.mat)), ]
+rownames(chloe.mat)
+
+dup.genes <- which(duplicated(rownames(chloe.mat)))
+rownames(chloe.mat)[dup.genes]
+chloe.mat <- chloe.mat[-dup.genes, ]
+
+colnames(chloe.mat) <- cell.names
+dim(chloe.mat)
+
+chloe.metadata <- chloe.metadata[match(cell.names, chloe.metadata$index), ]
+rownames(chloe.metadata) <- chloe.metadata$index
+#chloe.metadata$sex <- as.character(chloe.metadata$sex)
+#chloe.metadata$stage <- as.character(chloe.metadata$time)
+
+
+pgc.chloe <- CreateSeuratObject(chloe.mat, meta.data = chloe.metadata, min.cells = 10)
+
+table(pgc.chloe$time)
+pgc.chloe.10.5 <- subset(pgc.chloe, subset = time %in% c("E10.5"))
+pgc.chloe.10.5$subgroup <- "PGC"
+pgc.chloe.11.5 <- subset(pgc.chloe, subset = time %in% c("E10.5","E11.5"))
+pgc.chloe.11.5$subgroup <- "PGC"
+
+
+samples_merged_10.5 <- merge(x= pgc.chloe.10.5, y= c(pgc.marioni, tum_myc_ec, tum_myc_ic, tum_spinal, tum_shh), merge.data = T)
+
+DefaultAssay(samples_merged_10.5) <- "RNA"
+samples_merged_10.5 <- NormalizeData(samples_merged_10.5)
+
+samples_merged_11.5 <- merge(x= pgc.chloe.11.5, y= c(pgc.marioni, tum_myc_ec, tum_myc_ic, tum_spinal, tum_shh), merge.data = T)
+
+DefaultAssay(samples_merged_11.5) <- "RNA"
+samples_merged_11.5 <- NormalizeData(samples_merged_11.5)
+
+pgc.chloe$stage <- pgc.chloe$time
+pgc_merged <- merge(pgc.marioni, pgc.chloe)
+DefaultAssay(pgc_merged) <- "RNA"
+```
+
+
+# Dotplots of DNA demethylation genes
+
+```{r vnfughi}
+
+dna_demethyl_genes <- read_excel("./DNA_demethyl_genes.xlsx")
+dna_demethyl_genes <- dna_demethyl_genes$genes
+dna_demethyl_genes <- capitalize(tolower(dna_demethyl_genes))
+
+
+table(pgc_merged$stage)
+pgc_merged <- subset(pgc_merged, subset = stage != "mixed_gastrulation")
+
+tiff("./dotplot_demethyl_PGC_stage.tiff", width = 800, height = 600)
+DotPlot(pgc_merged, features = rev(dna_demethyl_genes), group.by = "stage", dot.scale = 10) +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+# merging earlier timepoints
+pgc_merged$stage <- plyr::mapvalues(pgc_merged$stage, from = c("E6.75", "E7.25", "E7.75", "E8.25"), to = c("E7.0", "E7.0", "E7.5", "E8.0"))
+
+pgc_merged$stage <- factor(pgc_merged$stage, levels = c("E7.0", "E7.5", "E8.0", "E8.5", "E10.5", "E11.5", "E12.5", "E13.5", "E16.5"), ordered = T)
+
+tiff("./dotplot_demethyl_PGC_stage_ordered.tiff", width = 800, height = 600)
+DotPlot(pgc_merged, features = rev(dna_demethyl_genes), group.by = "stage", dot.scale = 10) +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+pgc_merged$stage_restr <- plyr::mapvalues(pgc_merged$stage, from = c("E7.0", "E8.0"), to = c("E7.5", "E8.5"))
+
+tiff("./dotplot_demethyl_PGC_stage_ordered_restr.tiff", width = 800, height = 600)
+DotPlot(pgc_merged, features = rev(dna_demethyl_genes), group.by = "stage_restr", dot.scale = 10) +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+# adding tumor clusters
+tum_myc_ec$stage_restr <- "eRT-MYC"
+tum_myc_ic$stage_restr <- "ATRT-MYC" 
+tum_spinal$stage_restr <- "spinal-MYC"
+
+pgc_tum_merged <- merge(x = pgc_merged, y = c(tum_myc_ec, tum_myc_ic, tum_spinal))
+pgc_tum_merged$stage_restr <- factor(pgc_tum_merged$stage_restr, levels = c("E7.5", "E8.5", "E10.5", "E11.5", "E12.5", "E13.5", "E16.5", "ATRT-MYC" ,"eRT-MYC", "spinal-MYC"), ordered = T)
+
+tiff("./dotplot_demethyl_PGC_TUM_stage_ordered_restr.tiff", width = 600, height = 600)
+DotPlot(pgc_tum_merged, features = dna_demethyl_genes, group.by = "stage_restr", dot.scale = 10) +
+   theme(axis.text.y = element_text(size = 16)) +
+  coord_flip()
+dev.off()
+
+
+tiff("./dotplot_demethyl_till10_5.tiff", width = 800, height = 600)
+DotPlot(samples_merged_10.5, features = rev(dna_demethyl_genes), group.by = "subgroup") +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+
+tiff("./dotplot_demethyl_with11_5.tiff", width = 800, height = 600)
+DotPlot(samples_merged_11.5, features = rev(dna_demethyl_genes), group.by = "subgroup") +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+# without SHH
+samples_noshh_11.5 <- subset(samples_merged_11.5, subset = subgroup != "SHH_IC")
+
+table(samples_merged_11.5$subgroup)
+table(samples_noshh_11.5$subgroup)
+samples_noshh_11.5$subgroup <- factor(samples_noshh_11.5$subgroup, levels = rev(c("MYC_IC", "MYC_EC", "MYC_spinal", "PGC")), ordered = T)
+tiff("./dotplot_demethyl_with11_5_NOSHH.tiff", width = 800, height = 400)
+DotPlot(samples_noshh_11.5, features = rev(dna_demethyl_genes), group.by = "subgroup", dot.scale = 10) +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1))
+dev.off()
+
+
+tiff("./violin_plot_dna_demeth.tiff", width = 700, height = 900)
+VlnPlot(samples_merged, features = dna_demethyl_genes, group.by = "subgroup")
+dev.off()
+
+mat <- GetAssayData(samples_merged, slot = "data", assay = "RNA")
+mat <- mat[rownames(mat) %in% dna_demethyl_genes,]
+colnames(mat) <- samples_merged$subgroup
+
+mat <- as.matrix(mat)
+dim(mat)
+
+mat[1:5,1:5]
+genes <- rownames(mat)
+names(genes) <- "genes"
+mat <- cbind(genes, mat)
+
+library(tidyr)
+df <- tidyr::gather(mat,  key = "subgroup", value = "count")
+
+library(reshape2)
+df <- reshape2::melt(mat)
+colnames(df) <- c("gene", "subgroup", "value")
+
+tiff("./boxplot_demethyl.tiff", width = 800, height = 600)
+ggplot(df, aes(x = gene, y = value, fill = subgroup)) +
+  geom_boxplot(position=position_dodge(1))
+dev.off()
+```
+
+
+```{r vnrui}
+
+DotPlot(tum_spinal, features = c("Dnmt1", "Ezh2"))
+
+
+```

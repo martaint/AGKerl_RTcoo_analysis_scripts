@@ -1,0 +1,55 @@
+---
+title: "Comparison tumor clusters MYC"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/comparison_MYC")
+
+
+```
+
+
+### Load tumor datasets
+
+```{r cmsio}
+tum_myc_ic <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_tumor_cells.rds")
+tum_myc_ec <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+tum_spinal <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+
+# assign subgroup
+tum_myc_ic$subgroup <- "MYC_IC"
+tum_myc_ec$subgroup <- "MYC_EC"
+tum_spinal$subgroup <- "MYC_spinal"
+
+tumor_merged <- merge(x= tum_myc_ic, y= c(tum_myc_ec, tum_spinal), merge.data = T)
+
+# DE analysis
+DefaultAssay(tumor_merged) <- "RNA"
+Idents(tumor_merged) <- tumor_merged$subgroup
+
+
+for (i in levels(Idents(tumor_merged))){
+  markers <- FindMarkers(tumor_merged, ident.1 = i, test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("DEtum_comparison_", i, ".xlsx"), row.names = T)
+}
+
+
+```

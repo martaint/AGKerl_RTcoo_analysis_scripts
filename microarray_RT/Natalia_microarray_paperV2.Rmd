@@ -1,0 +1,2332 @@
+---
+title: "Natalia mouse RT + human samples (microarray) - paper version 2"
+date: "17.12.18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(GEOquery)
+library(oligo)
+library(oligoClasses)
+library(biomaRt)
+library(reshape2)
+library(limma)
+library(xlsx)
+library(calibrate)
+library(pd.mogene.2.0.st)
+library(mogene20sttranscriptcluster.db)
+library(a4Base)
+library(genefilter)
+library(sva)
+library(pd.hg.u133.plus.2)
+library(hyperSpec)
+#library(heatmap3)
+library(fpc)
+library(cluster)
+library(dendextend)
+#library(WGCNA)
+#library(GOplot)
+library(schoolmath)
+library(lava)
+library(readxl)
+library(ggsignif)
+library(Rtsne)
+
+setwd("/home/microarray/Natalia/v2")
+source("/home/microarray/code/collapseByMedian.R")
+source("/home/microarray/code/MYvariationFilter.R")
+
+load("/home/microarray/Natalia/v2/workspace.RData")
+```
+
+
+# Rhabdoid tumor
+## Murine samples from Natalia
+
+```{r read, results="hide"}
+# First dataset
+#listing the files from directory using special CEL file read function
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/mouseRT_Natalia/Dataset1", full.names=TRUE, listGzipped=FALSE)
+
+#reading data from cellist and setting annotation package to appropriate one for this microarray
+rawData <- read.celfiles(celList, pkgname='pd.mogene.2.0.st')
+
+# Second dataset
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/mouseRT_Natalia/P159/CEL files", full.names=TRUE, listGzipped=FALSE)
+rawData2 <- read.celfiles(celList, pkgname='pd.mogene.2.0.st')
+
+# Third dataset
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/mouseRT_Natalia/P176/CEL files", full.names=TRUE, listGzipped=FALSE)
+rawData3 <- read.celfiles(celList, pkgname='pd.mogene.2.0.st')
+
+```
+
+## RMA-process 
+
+```{r RMAprocessing}
+#normalizing the data using RMA algorithm
+normData <- rma(rawData)
+normData2 <- rma(rawData2)
+normData3 <- rma(rawData3)
+#checking boxplot of raw data
+# boxplot(exprs(rawData))
+# boxplot(exprs(rawData2))
+# boxplot(exprs(rawData3))
+#checking boxplot of normalized data
+# boxplot(exprs(normData))
+# boxplot(exprs(normData2))
+# boxplot(exprs(normData3))
+#Fixing column names
+colnames(normData) <- sub("_(.*)(.CEL)$", "", colnames(normData))
+colnames(normData) <- sub(" ","_",colnames(normData))
+
+colnames(normData2) <- sub(".CEL", "", colnames(normData2))
+colnames(normData3) <- sub(".CEL", "", colnames(normData3))
+# add phenodata from excel table
+MpData <- read.csv("/home/microarray/Natalia/Datasets/phenoDataMurine.csv", header = TRUE, row.names = "name")
+```
+
+
+```{r combatmurine}
+# Correct for batch effects using combat 
+# add dataset in pheno
+normData$dataset <- "dataset1"
+normData2$dataset <- "dataset2"
+normData3$dataset <- "dataset3"
+comb1 <- combineTwoExpressionSet(normData, normData2)
+combinedDB <- combineTwoExpressionSet(comb1, normData3)
+
+batch <- combinedDB$dataset
+modcombat <- model.matrix(~1, data=combinedDB)
+combat_edata <- ComBat(dat=exprs(combinedDB), batch=batch, mod=modcombat)
+boxplot(combat_edata)
+exprs(combinedDB) <- combat_edata
+mouseData <- combinedDB
+```
+
+
+
+## Annotate probeset
+
+```{r annotation}
+
+annotateGene <- function (Eset, db , what , missing ) { 
+   tab <- toTable(db[intersect(featureNames(Eset), mappedkeys(db)) ]) 
+   mt <- match(featureNames(Eset), tab$probe_id)
+   ifelse (is.na(mt), missing ,tab[[ what ]][ mt ])
+   } 
+ 
+ 
+fData(mouseData)$symbol <- annotateGene(mouseData, mogene20sttranscriptclusterSYMBOL ,"symbol" , NA ) 
+fData(mouseData)$genename <- annotateGene(mouseData, mogene20sttranscriptclusterGENENAME , "gene_name" , NA ) 
+fData(mouseData)$ensembl <- annotateGene(mouseData, mogene20sttranscriptclusterENSEMBL , "ensembl_id" ,  NA )
+ 
+#merge multiple probes
+Mdata.collapsed <- collapseByMedian(mouseData, "ensembl")
+dim(Mdata.collapsed)
+exprs(Mdata.collapsed)[1:5,]
+mouse_RT <- Mdata.collapsed
+mouse_RT$type <- "mouseRT"
+
+``` 
+
+
+
+
+
+# Hierarchical clustering mouse data
+Here we apply a hierarchical clustering on the 3 datasets of mouse tumor from Natalia.
+
+```{r hclustmousenat}
+# Restrict the analysis to the 5000 genes with the highest mad
+mouseRTfilt <- variationFilter(mouse_RT, 5000)
+pData(mouseRTfilt) <- MpData
+## calculate distance matrix for columns: use euclidean
+distmatrix.col<- dist(t(exprs(mouseRTfilt)), method = "euclidean")
+
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+hcd <- as.dendrogram(hc.col)
+
+labelColors <- c("red","blue")
+
+sampleCol <- labelColors[as.factor(mouseRTfilt$localization)][order.dendrogram(hcd)]
+labels_colors(hcd) <- sampleCol
+hcd <- dendextend::set(hcd, "labels_cex", 1)
+
+tiff("dendroMouse.tiff", width = 600, height = 500)
+par(mar=c(12,4.1,4.1,2.1))
+plot(hcd, main = "Dendrogram murine samples")
+legend("topright", legend = levels(mouseRTfilt$localization), col = labelColors, pch=15)
+dev.off()
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+colors <- labelColors[as.factor(mouseRTfilt$localization)]
+tiff("dendroMouseNOlab.tiff", width = 600, height = 500)
+par(mar=c(4,4.3,4,4))
+plot(hcd, main = "Dendrogram murine samples")
+colored_bars(colors = colors, dend = hcd, rowLabels = "localization")
+legend("topright", legend = levels(mouseRTfilt$localization), col = labelColors, pch=15)
+dev.off()
+
+
+
+## Clustering validation
+groups <- cutree(hc.col, k = 2)
+valid <- cluster.stats(d = distmatrix.col, clustering = groups, silhouette = TRUE)
+
+# average distance within clusters
+valid$average.within
+
+# average distance between clusters
+valid$average.between
+
+# average silhouette width
+valid$avg.silwidth
+
+sil <- silhouette(groups, distmatrix.col) 
+sil.mat <- data.frame(cluster = sil[,1], silhouette = sil[,3], row.names = names(groups))
+write.xlsx(sil.mat, file = "silhouetteMouse.xlsx")
+sil[which(names(groups) == "P159_06_Soxertini_183"),]
+
+
+```
+
+
+## Human Rhabdoid tumors
+
+Now we take in consideration human samples coming from 2 different sources:
+* Johann et al. 49 samples of human ATRT
+* Birks et al. 18 samples of human ATRT
+ATRT samples will be aggregated together after correcting for batch effects
+
+```{r read_hum, results="hide"}
+# Johann ATRT
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_KoolATRT/GSE70678_RAW", full.names=TRUE, listGzipped= TRUE)
+hum_Johann <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+# Birks ATRT
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_BirksATRT/GSE28026_RAW", full.names=TRUE, listGzipped= TRUE)
+hum_Birks <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+
+```
+
+## RMA-process 
+
+```{r RMAprocessing}
+#normalizing the data using RMA algorithm
+normHum_Johann <- rma(hum_Johann)
+normHum_Birks <- rma(hum_Birks)
+
+
+#checking boxplot of normalized data
+tiff("boxplotHuman_norm.tiff")
+boxplot(exprs(normHum_Johann), at=1:49, xlim= c(0,68), col="blue")
+boxplot(exprs(normHum_Birks), at=50:67, add=TRUE, col="red")
+legend("topright", legend= c("Johann","Birks"), col=c("blue","red"), pch=20)
+dev.off()
+
+
+#Fixing column names
+colnames(normHum_Johann) <- sub("_(.*)(.cel.gz)$", "", colnames(normHum_Johann))
+colnames(normHum_Birks) <- sub("_(.*)(.CEL.gz)$", "", colnames(normHum_Birks))
+```
+
+
+```{r combatHS}
+# Correct for batch effects using combat on Johann and Birks datasets
+# add dataset in pheno
+normHum_Johann$dataset <- "GSE70678"
+normHum_Birks$dataset <- "GSE28026"
+combinedDB <- combineTwoExpressionSet(normHum_Johann, normHum_Birks)
+batch <- combinedDB$dataset
+modcombat <- model.matrix(~1, data=combinedDB)
+combat_edata <- ComBat(dat=exprs(combinedDB), batch=batch, mod=modcombat)
+tiff("boxplotHuman_batchcorrected.tiff")
+boxplot(combat_edata)
+dev.off()
+exprs(combinedDB) <- combat_edata
+human_atrt <- combinedDB
+dim(human_atrt)
+```
+
+## Annotate human probeset
+
+```{r biomart}
+# human ATRT
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+mapping <- getBM(attributes=c("affy_hg_u133_plus_2","ensembl_gene_id","hgnc_symbol"),
+               mart=mart)
+
+
+rows.match <- match(featureNames(human_atrt), mapping$affy_hg_u133_plus_2)
+fdat.new <- cbind(fData(human_atrt), mapping[rows.match,])
+fData(human_atrt) <- fdat.new
+
+
+#merge multiple probes
+human_atrt <- collapseByMedian(human_atrt, "ensembl_gene_id")
+dim(human_atrt)
+human_atrt$type <- "humanATRT"
+
+```
+
+# Adding clustering annotation (SHH/TYR/MYC) from Johann's paper (.xslx file)
+
+```{r dkfz}
+pData(human_atrt)
+
+# Connect to GEO and download the dataset 
+#gseJoh <- getGEO("GSE70678", GSEMatrix = TRUE)
+#phenoJoh <- pData(gseJoh[[1]])
+#write.xlsx(phenoJoh, file = "phenoJoh.xlsx")
+
+dkfz.clust <- read_excel("/home/microarray/Natalia/Datasets/DKFZclustering.xlsx")
+human_atrt$type <- unlist(dkfz.clust[match(colnames(human_atrt), dkfz.clust$geo_accession), "cluster"])
+
+human_atrt$type <- paste("humanATRT_", human_atrt$type, sep = "")
+pData(human_atrt)
+
+```
+
+## 18.05.20 heatmap of PGCs predictors for human ATRT data
+
+
+```{r cnmvoina}
+pgc.genes <- read_excel("/home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/PGC_predictors.xlsx")
+pgc.pos.predictors <- pgc.genes[pgc.genes$coefficient > 0,]$predictors
+
+
+# get human homologous genes
+ensembl.mouse <- useMart(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+mapping.pgc.mou.hum <- getBM(attributes=c("hsapiens_homolog_associated_gene_name"),
+               filters="mgi_symbol",
+               values=pgc.pos.predictors,
+               mart=ensembl.mouse)
+head(mapping.pgc.mou.hum)
+pgc.pos.predictors.hum <- mapping.pgc.mou.hum$hsapiens_homolog_associated_gene_name
+
+sum(fData(human_atrt)$hgnc_symbol %in% pgc.pos.predictors.hum)
+
+ind.row <- fData(human_atrt)$hgnc_symbol %in% pgc.pos.predictors.hum 
+
+hum.atrt.pgc <- human_atrt[ind.row,]
+dim(hum.atrt.pgc)
+row.names <- fData(hum.atrt.pgc)$hgnc_symbol
+hum.pgc.mat <- exprs(hum.atrt.pgc)
+rownames(hum.pgc.mat) <- row.names
+
+library(pheatmap)
+library(RColorBrewer)
+col_annot <- data.frame(subgroup = hum.atrt.pgc$type, row.names = colnames(hum.atrt.pgc))
+
+pheatmap(hum.pgc.mat, scale = "none",  color = colorRampPalette(brewer.pal(n = 7, name =
+  "Greys"))(100), cluster_rows = T, cluster_cols = T,  clustering_distance_cols = "euclidean", clustering_method = "ward.D2",   annotation_col = col_annot, show_rownames = T, show_colnames = F, filename = "hum_atrt_PGCs_predictorsHeatmap.tiff", width = 10, height = 6)
+
+
+
+```
+
+## Plot Tet1 in mouse and human
+
+```{r gvnruig}
+
+genes <- "ENSG00000138336"
+data <- human_atrt
+
+plotBoxplot <- function(data, genes){
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(data)))))
+  value <- as.vector(t(exprs(data)[genes,]))
+  
+  df.boxplot <- data.frame(gene , value)
+
+  p <- ggplot(df.boxplot, aes(x = gene, y = value)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Normalized gene expression") +
+    scale_x_discrete(name = "Gene") +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 12)) 
+    return(p)
+}
+
+
+
+tiff("boxplot_Tet1_human.tiff", width = 700, height = 600)
+print(plotBoxplot("ENSG00000138336", data = human_atrt))
+dev.off()
+
+tiff("boxplot_Tet1_mouse.tiff", width = 700, height = 600)
+print(plotBoxplot("ENSMUSG00000047146", data = mouse_RT))
+dev.off()
+
+
+```
+## Orthologous genes
+
+```{r ortho}
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+mapping.hs.mm <-getBM(attributes=c("ensembl_gene_id","mmusculus_homolog_ensembl_gene"),
+               filters="with_mmusculus_homolog",
+               values=TRUE,
+               mart=mart)
+head(mapping.hs.mm)
+
+# restricting data to the list of orthologus gene
+indHuman <- na.omit(match(rownames(human_atrt), mapping.hs.mm[,1]))
+indMouse <- na.omit(match(rownames(mouse_RT), mapping.hs.mm[,2]))
+ind2keep <- intersect(indHuman, indMouse)
+humanGene <- mapping.hs.mm[ind2keep,1]
+mouseGene <- mapping.hs.mm[ind2keep,2]
+
+orthuman_atrt <- human_atrt[humanGene,]
+ortmouse_RT <- mouse_RT[mouseGene,]
+dim(orthuman_atrt)
+dim(ortmouse_RT)
+
+
+```
+
+# Boxplot before relative gene expression
+
+```{r bp}
+tiff("boxplot_before_relative_geneexpr.tiff", width = 800, height = 700)
+boxplot(exprs(orthuman_atrt), at=1:67, ylim = c(0.5, 14.5), xlim= c(0,109), col="blue", main="Boxplots before relative gene expression calculation", xlab="Samples", xaxt="n")
+boxplot(exprs(ortmouse_RT), at=68:108, add=TRUE, col="red", xaxt="n")
+legend("topright", legend= c("Human samples","Mouse samples"), col=c("blue","red"), pch=20)
+dev.off()
+```
+
+
+# Relative Gene expression values
+Here we calculate a relative gene expression value for each combined dataset, in order to be able to compare them. A relative gene expression value is calculated first subtracting to each gene expression measure the mean value across all the samples, then the result is divided by the standard deviation across all samples.
+
+```{r relativegeneexpr}
+relativeGeneExprs <- function(dataset){
+  gene_mean <- rowMeans(exprs(dataset))
+  gene_sd <- rowSds(exprs(dataset))
+  exprs_norm <- (exprs(dataset)-gene_mean) / gene_sd
+  return(exprs_norm)
+}
+
+exprs(ortmouse_RT) <- relativeGeneExprs(ortmouse_RT)
+exprs(orthuman_atrt) <- relativeGeneExprs(orthuman_atrt)
+
+tiff("boxplot_relative_geneexpr.tiff", width = 800, height = 700)
+boxplot(exprs(orthuman_atrt), at=1:67, xlim= c(0,109), col="blue", main="Boxplots of relative gene expression", xlab="Samples", xaxt="n")
+boxplot(exprs(ortmouse_RT), at=68:108, add=TRUE, col="red", xaxt="n")
+legend("topright", legend= c("Human samples","Mouse samples"), col=c("blue","red"), pch=20)
+dev.off()
+
+```
+
+
+
+## Hierarchical clustering of Natalia's mouse and human ATRTs
+
+```{r hclustmmhm1}
+
+# add info about group in mouse tumor
+indRosa <- MpData$group == "rosa26cre"
+pData(ortmouse_RT)[indRosa, "type"] <- "mouseRT- Rosa26 cre"
+pData(ortmouse_RT)[!indRosa, "type"] <- "mouseRT- Sox2 cre"
+
+
+
+length(unique(fData(orthuman_atrt)$hgnc_symbol))
+length(unique(fData(ortmouse_RT)$symbol))
+
+# Fix gene names: let's rename all gene by their MOUSE HGNC symbol 
+rownames(orthuman_atrt) <- fData(ortmouse_RT)$symbol
+rownames(ortmouse_RT) <- fData(ortmouse_RT)$symbol
+
+
+fData(ortmouse_RT)[1:5,]
+fData(orthuman_atrt)[1:5,]
+
+
+datasetATRT <- combineTwoExpressionSet(ortmouse_RT,orthuman_atrt)
+
+dim(datasetATRT)
+
+pData(datasetATRT)
+
+# Restrict the analysis to the 5000 genes with the highest mad
+atrt_filtered_1 <- variationFilter(datasetATRT, 5000)
+dim(atrt_filtered_1)
+
+# Loop to calculate and plot different clustering
+clust.dist <- c("euclidean", "pearson")
+clust.method <- c("average","ward.D2")
+
+for (i in clust.method){
+  for (j in clust.dist){
+    # set the distance method
+    if (j == "euclidean"){
+      distmatrix.col <- dist(t(exprs(atrt_filtered_1)), method = "euclidean")
+    } else{
+      distmatrix.col <- as.dist(1-cor(exprs(atrt_filtered_1), method="pearson"))
+    }
+    # calculate clustering
+    hc.col <- hclust(distmatrix.col, method = i) 
+    # dendrogramm
+    hcd = as.dendrogram(hc.col)
+
+    ## Clustering validation
+    groups <- cutree(hc.col, k = 3)
+    valid <- cluster.stats(d = distmatrix.col, clustering = groups, silhouette = TRUE)
+    # average distance within clusters
+    within <- valid$average.within
+    #average distance between clusters
+    between <- valid$average.between
+    # average silhouette width
+    avg.sil <- valid$avg.silwidth
+
+    
+    labelColors <- rainbow(length(levels(as.factor(atrt_filtered_1$type))))
+    labelColors[c(2,3)] <- c("orange","forestgreen")
+    sampleCol <- labelColors[as.factor(atrt_filtered_1$type)][order.dendrogram(hcd)]
+    labels_colors(hcd) <- sampleCol
+    hcd <- dendextend::set(hcd, "labels_cex", 1)
+    tiff(paste("dendroNat_Human_", j,"_", i, ".tiff", sep = ""), width = 1500, height = 900)
+    par(mar=c(13,4.1,4.1,2.1))
+    plot(hcd, main = paste("Dendrogram human and murine samples, method = ", i, " distance = ", j, sep = ""),
+         sub = paste("avg.dist.within = ", round(within, digits = 3),
+                              ", avg.dist.between = ",round(between, digits = 3), 
+                              ", avg.silhouette = ", round(avg.sil, digits = 3), sep = ""))
+    legend("topright", legend = levels(as.factor(atrt_filtered_1$type)), col = labelColors, pch=20)
+    
+    dev.off()
+    
+    
+    
+  }
+}
+
+
+
+## PCA
+pca <- prcomp(t(exprs(atrt_filtered_1)))
+summary(pca)$importance[3, 1:3]
+three.comp <- pca$x[, 1:3]
+labelColors <- rainbow(length(levels(as.factor(atrt_filtered_1$type))))
+labelColors[c(2,3)] <- c("orange","forestgreen")
+colors <- labelColors[as.factor(atrt_filtered_1$type)]
+
+# get rid of the names for human
+names <- rownames(three.comp)
+names <- sub("GSM(.)*", "",names)
+tiff("pca.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,2],pch=20,xlab="1st PCA",ylab="2nd PCA",col=colors)
+text(three.comp[,1], three.comp[,2], labels = names, pos= 4)
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered_1$type)), col=labelColors)
+dev.off()
+
+
+# # bootstrapping 
+# library(fpc)
+# clust.boot <- clusterboot(distmatrix.col, B=5, 
+#                           distances = T,
+#                           bootmethod="boot",
+#                           clustermethod=disthclustCBI, method="average", k=3,
+#                           seed=15555)
+# 
+# clust.boot$bootresult
+# clust.boot$bootmean
+# a <- as.dendrogram(clust.boot$result[1]$result)
+# b <- as.dendrogram(clust.boot$result$result)
+# plot(a)
+
+
+
+
+
+#K-means
+set.seed(20)
+km.clust <- kmeans(t(exprs(atrt_filtered_1)), centers = 3, nstart = 100)
+tiff("k_means.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,2],pch = km.clust$cluster,xlab="1st PCA",ylab="2nd PCA", col = colors)
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered_1$type)), col=labelColors)
+dev.off()
+
+# Check the silhouette value for 3 sox samples 
+distmatrix.col <- as.dist(1-cor(exprs(atrt_filtered_1), method="pearson"))
+hc.col <- hclust(distmatrix.col, method = "ward.D2") 
+groups <- cutree(hc.col, k = 3)
+
+sil <- silhouette(groups, distmatrix.col) 
+sil.mat <- data.frame(cluster = sil[,1], silhouette = sil[,3], row.names = names(groups))
+write.xlsx(sil.mat, file = "silhouetteMouse.xlsx")
+sil[which(names(groups) == "P159_06_Soxertini_183"),]
+sil[which(names(groups) == "P176_14_Sox_456_brain"),]
+sil[which(names(groups) == "P159_08_Soxini_203"),]
+
+# Colored bars
+# hcd <- as.dendrogram(hc.col)
+# hcd <- dendextend::set(hcd, "labels", NA)
+# colors <- labelColors[as.factor(atrt_filtered_1$type)]
+# tiff("dendroNat_HumanNOlabspear.tiff", width = 1500, height = 900)
+# par(mar=c(4.1,4.1,4.1,2.1))
+# plot(hcd, main = "Dendrogram human and Natalia's murine samples", cex.main= 2)
+# colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+# legend("topright", legend = levels(as.factor(atrt_filtered_1$type)), col = labelColors, pch = 15, cex = 1.7)
+# dev.off()
+
+
+
+
+
+```
+
+
+## Hierarchical clustering of only mouse from Natalia (only intracranial) and human ATRTs
+
+```{r hclustmmhmonlynat}
+# excluding extracranial
+mouseEC <- rownames(MpData)[MpData$localization == "extracranial"]
+ortmouse_RTintr <- ortmouse_RT[,colnames(ortmouse_RT) %ni% mouseEC]
+dim(ortmouse_RTintr)
+
+ds3 <- combineTwoExpressionSet(ortmouse_RTintr,orthuman_atrt)
+
+dim(ds3)
+pData(ds3)
+
+# Restrict the analysis to the 5000 genes with the highest mad
+atrt_filtered <- variationFilter(ds3, 5000)
+dim(atrt_filtered)
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- as.dist(1-cor(exprs(atrt_filtered), method="pearson"))
+distmatrix.col <- dist(t(exprs(atrt_filtered)), method = "euclidean")
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+groups <- cutree(hc.col, k = 3)
+sil <- silhouette(groups, distmatrix.col) 
+sil.mat <- data.frame(cluster = sil[,1], silhouette = sil[,3], row.names = names(groups))
+write.xlsx(sil.mat, file = "silhouetteMouseINT.xlsx")
+sil[which(names(groups) == "P159_06_Soxertini_183"),]
+sil[which(names(groups) == "P176_14_Sox_456_brain"),]
+sil[which(names(groups) == "P159_08_Soxini_203"),]
+
+# dendrogramm
+hcd = as.dendrogram(hc.col)
+
+labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+labelColors[c(2,3)] <- c("orange","forestgreen")
+sampleCol <- labelColors[as.factor(atrt_filtered$type)][order.dendrogram(hcd)]
+labels_colors(hcd) <- sampleCol
+hcd <- dendextend::set(hcd, "labels_cex", 1)
+tiff("dendroHum_mouseINTlabs.tiff",width = 1500,height = 900)
+par(mar=c(13,4.1,4.1,2.1))
+plot(hcd, main= paste("Dendrogram human and murine samples (only intracranial n=", ncol(ortmouse_RTintr) ,")", sep = ""))
+legend("topright", legend = levels(as.factor(atrt_filtered$type)), col = labelColors, pch=20)
+dev.off()
+
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+labelColors[c(2,3)] <- c("orange","forestgreen")
+
+colors <- labelColors[as.factor(atrt_filtered$type)]
+tiff("dendroHum_mouseINT.tiff", width = 1500, height = 900)
+#par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = paste("Dendrogram human and murine samples (only intracranial n=", ncol(ortmouse_RTintr) ,")", sep = ""), cex.main= 2)
+dendextend::colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 0.5, add = T)
+legend("topright", legend = levels(as.factor(atrt_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+# add grouping information in the pData 
+
+tyr.names <- names(groups[which(groups == 3)])
+shh.names <- names(groups[which(groups == 2)])
+myc.names <- names(groups[which(groups == 1)])
+
+pData(ortmouse_RTintr)[intersect(colnames(ortmouse_RTintr), shh.names), "cluster"] <- "SHH"
+pData(ortmouse_RTintr)[intersect(colnames(ortmouse_RTintr), myc.names), "cluster"] <- "MYC"
+
+
+## PCA
+pca <- prcomp(t(exprs(atrt_filtered)))
+summary(pca)$importance[3, 1:3]
+three.comp <- pca$x[, 1:3]
+# labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+# labelColors[c(2,3)] <- c("orange","forestgreen")
+labelColors <- c("#1f6f30", "#274492", "#cc151c", "#b2b2b2", "#575756")
+colors <- labelColors[as.factor(atrt_filtered$type)]
+
+# get rid of the names for human
+names <- rownames(three.comp)
+names <- sub("GSM(.)*", "",names)
+tiff("pcaINT.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,3],pch=20,xlab="1st PC",ylab="3rd PC",col=colors, cex = 2.5)
+#text(three.comp[,1], three.comp[,2], labels = names, pos= 1)
+title("PCA of human and murine IC samples")
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered$type)), col=labelColors)
+dev.off()
+
+
+#K-means
+set.seed(20)
+km.clust <- kmeans(t(exprs(atrt_filtered)), centers = 3, nstart = 100)
+tiff("k_meansINT.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,2],pch = km.clust$cluster,xlab="1st PCA",ylab="2nd PCA", col = colors, cex = 2.5)
+title("K-means of human and murine IC samples (k=3)")
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered$type)), col=labelColors)
+dev.off()
+
+
+# T-SNE
+set.seed(20)
+tsne_INT <- Rtsne(t(exprs(atrt_filtered)), dims = 2, perplexity = 10, initial_dims = 25)
+plot(tsne_INT$Y, col=labelColors, asp=1, pch = 19)
+```
+
+
+## Hierarchical clustering of only mouse from Natalia (only EXTRAcranial) and human ATRTs
+
+```{r hclustmmhmonlynatex}
+# excluding intracranial
+mouseEC <- rownames(MpData)[MpData$localization == "extracranial"]
+ortmouse_RText <- ortmouse_RT[,colnames(ortmouse_RT) %in% mouseEC]
+dim(ortmouse_RText)
+
+ds4 <- combineTwoExpressionSet(ortmouse_RText,orthuman_atrt)
+
+dim(ds4)
+
+
+# Restrict the analysis to the 5000 genes with the highest mad
+atrt_filtered <- variationFilter(ds4, 5000)
+dim(atrt_filtered)
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- as.dist(1- cor(exprs(atrt_filtered), method="pearson"))
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+groups <- cutree(hc.col, k = 3)
+sil <- silhouette(groups, distmatrix.col) 
+sil.mat <- data.frame(cluster = sil[,1], silhouette = sil[,3], row.names = names(groups))
+write.xlsx(sil.mat, file = "silhouetteMouseEXT3g.xlsx")
+sil[which(names(groups) == "P159_06_Soxertini_183"),]
+sil[which(names(groups) == "P176_14_Sox_456_brain"),]
+sil[which(names(groups) == "P159_08_Soxini_203"),]
+
+#  Dendrogram and Colored bars
+hcd <- as.dendrogram(hc.col)
+
+labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+labelColors[c(2,3)] <- c("orange","forestgreen")
+sampleCol <- labelColors[as.factor(atrt_filtered$type)][order.dendrogram(hcd)]
+labels_colors(hcd) <- sampleCol
+hcd <- dendextend::set(hcd, "labels_cex", 1)
+tiff("dendroHum_mouseEXTlabs.tiff",width = 1500,height = 900)
+par(mar=c(13,4.1,4.1,2.1))
+plot(hcd, main= paste("Dendrogram human and murine samples (only extracranial n=", ncol(ortmouse_RText) ,")", sep = ""))
+legend("topright", legend = levels(as.factor(atrt_filtered$type)), col = labelColors, pch=20)
+dev.off()
+
+
+
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+labelColors[c(2,3)] <- c("orange","forestgreen")
+
+colors <- labelColors[as.factor(atrt_filtered$type)]
+tiff("dendroMouse_HumanEXT.tiff", width = 1500, height = 900)
+par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = paste("Dendrogram human and murine samples (only extracranial n=", ncol(ortmouse_RText) ,")", sep = ""), cex.main= 2)
+colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+legend("topright", legend = levels(as.factor(atrt_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+# add grouping information in the pData 
+
+tyr.names <- names(groups[which(groups == 3)])
+shh.names <- names(groups[which(groups == 2)])
+myc.names <- names(groups[which(groups == 1)])
+
+#pData(ortmouse_RText)[intersect(colnames(ortmouse_RText), shh.names), "cluster"] <- "SHH"
+pData(ortmouse_RText)[intersect(colnames(ortmouse_RText), myc.names), "cluster"] <- "MYC"
+
+# 4 GROUPS -> TYR AND MYC
+
+groups <- cutree(hc.col, k = 4)
+sil <- silhouette(groups, distmatrix.col) 
+sil.mat <- data.frame(cluster = sil[,1], silhouette = sil[,3], row.names = names(groups))
+write.xlsx(sil.mat, file = "silhouetteMouseEXT4g.xlsx")
+
+# add grouping information in the pData 
+
+tyr.names <- names(groups[which(groups == 2)])
+myc.names <- names(groups[which(groups == 1)])
+
+pData(ortmouse_RText)[intersect(colnames(ortmouse_RText), tyr.names), "cluster4g"] <- "TYR"
+pData(ortmouse_RText)[intersect(colnames(ortmouse_RText), myc.names), "cluster4g"] <- "MYC"
+
+
+## PCA
+pca <- prcomp(t(exprs(atrt_filtered)))
+summary(pca)$importance[3, 1:3]
+three.comp <- pca$x[, 1:3]
+# labelColors <- rainbow(length(levels(as.factor(atrt_filtered$type))))
+# labelColors[c(2,3)] <- c("orange","forestgreen")
+labelColors <- c("#1f6f30", "#274492", "#cc151c", "#b2b2b2", "#575756")
+
+colors <- labelColors[as.factor(atrt_filtered$type)]
+
+# get rid of the names for human
+names <- rownames(three.comp)
+names <- sub("GSM(.)*", "",names)
+tiff("pcaEXT.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,2],pch=20,xlab="1st PCA",ylab="2nd PCA",col=colors, cex = 2.5)
+#text(three.comp[,1], three.comp[,2], labels = names, pos= 1)
+title("PCA of human and murine EC samples")
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered$type)), col=labelColors)
+dev.off()
+
+
+#K-means
+set.seed(20)
+km.clust <- kmeans(t(exprs(atrt_filtered)), centers = 3, nstart = 100)
+tiff("k_meansEXT.tiff", width = 800, height = 800)
+plot(x=three.comp[,1],y=three.comp[,2],pch = km.clust$cluster,xlab="1st PCA",ylab="2nd PCA", col = colors, cex = 2.5)
+title("K-means of human and murine EC samples (k=3)")
+legend("topleft",pch=20,legend=levels(as.factor(atrt_filtered$type)), col=labelColors)
+dev.off()
+
+
+
+```
+
+
+
+# Analysis Natalia for paper
+# Differential expression
+Here we want DE genes between MYC and SHH groups considering only IC mouse samples from natalia
+
+
+```{r demyc-shh}
+# Read excel table with classification
+class.subgroups <- read_excel("/home/microarray/Natalia/Datasets/mouse_classification_subgroups.xlsx")
+rownames(class.subgroups) <- class.subgroups$Sample
+# take mouse dataset before the calculation of relative value
+mouse4de <- mouse_RT
+head(mouse4de)
+mouse4de <- collapseByMedian(mouse4de, "symbol")
+mouse4de_int <- mouse4de[, MpData$localization == "intracranial"]
+dim(mouse4de_int)
+pData(mouse4de_int)[, "type"] <- class.subgroups[colnames(mouse4de_int), "Classification"]
+
+
+mouse4de_int <- mouse4de_int[,order(mouse4de_int$type)]
+pheno <- mouse4de_int$type
+
+
+
+#differential expression analysis using limma
+library(limma)
+
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("MYC", "SHH")
+contrast.matrix <- makeContrasts(MYC-SHH, levels = design)
+fit <- lmFit(mouse4de_int, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+#get full differential expression output table, sorted by p-value
+limmaResMYC_SHH <- topTable(fit, coef= 1, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+
+# Volcano plot for limma
+myvolcanoPlot <- function(limmaRes, logFC, qval){
+  subset_limma <- limmaRes[, c("symbol","logFC","adj.P.Val")]
+  colnames(subset_limma) <- c("gene","log2FoldChange","q_value")
+  with(subset_limma, plot(log2FoldChange, -log10(q_value), pch=20, main="Limma Volcano plot"))
+
+  # Add colored points: red if adj.P.Val<0.001, orange if log2FC>3, green if both)
+  with(subset(subset_limma, q_value<qval ), points(log2FoldChange, -log10(q_value), pch=20, col="red"))
+  with(subset(subset_limma, abs(log2FoldChange)>logFC), points(log2FoldChange, -log10(q_value), pch=20,
+                                                               col="orange"))
+  with(subset(subset_limma, q_value<qval & abs(log2FoldChange)>logFC), points(log2FoldChange, -log10(q_value),
+                                                                              pch=20, col="green"))
+  with(subset(subset_limma, q_value<qval & abs(log2FoldChange)>logFC), textxy(log2FoldChange,
+                                                                         -log10(q_value),labs=gene[1:10], cex=.8))
+}
+
+myvolcanoPlot(limmaResMYC_SHH, 2, 0.01)
+
+
+# subset to genes with adjusted p-value cutoff= 0.01, that is, since we used BH method, the expected 
+# proportion of false discoveries in the selected group is controlled to be less than the threshold, in
+# this case 1 every 100 genes
+adjpcutoff <- 0.05
+limmaRes.sigMYC_SHH <- subset(limmaResMYC_SHH, adj.P.Val < adjpcutoff)
+
+write.xlsx(limmaRes.sigMYC_SHH, "DElistMYC-SHH_mouseIC.xlsx") 
+
+
+
+topGenes.upMYC_SHH <- subset(limmaRes.sigMYC_SHH, logFC>2)
+topGenes.downMYC_SHH <- subset(limmaRes.sigMYC_SHH, logFC<(-2))
+
+
+write.xlsx(topGenes.upMYC_SHH, "topGenes.upMYC-SHH_mouseIC.xlsx") 
+write.xlsx(topGenes.downMYC_SHH, "topGenes.downMYC-SHH_mouseIC.xlsx") 
+
+
+##### Functional with Toppgene
+# Import ToppGene results
+# MYC
+library(ggplot2)
+toppg.resMYC <- read.table(file = "Toppgene/MYC_IC.txt", header = T, sep = "\t")
+res <- subset(toppg.resMYC, toppg.resMYC$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationMYC_mouseIC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for MYC (mouseIC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# # only go terms
+# toppg.resMYC.GO <- toppg.resMYC[grep("GO",toppg.resMYC$Category),]
+# res <- subset(toppg.resMYC.GO, toppg.resMYC.GO$q.value.Bonferroni<0.05)
+# res <- res[order(res$q.value.Bonferroni),]
+# if(nrow(res)>=30){
+#     res <- res[1:30,]
+# }
+# tiff(filename = "annotationMYC_GOterms_mouseIC.tiff", height = 800, width = 1500)
+# print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+#           geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+#           geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+#           labs(title = "Significant Terms annotated for MYC (mouseIC) ", x="q-value Bonferroni", y="Name"))
+# dev.off()
+
+
+# SHH
+toppg.resSHH <- read.table(file = "Toppgene/SHH_IC.txt", header = T, sep = "\t")
+res <- subset(toppg.resSHH, toppg.resSHH$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationSHH_mouseIC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for SHH (mouseIC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# # only go terms
+# toppg.resSHH.GO <- toppg.resSHH[grep("GO",toppg.resSHH$Category),]
+# res <- subset(toppg.resSHH.GO, toppg.resSHH.GO$q.value.Bonferroni<0.05)
+# res <- res[order(res$q.value.Bonferroni),]
+# if(nrow(res)>=30){
+#     res <- res[1:30,]
+# }
+# tiff(filename = "annotationSHH_GOterms_mouseIC.tiff", height = 800, width = 1500)
+# print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+#           geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+#           geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+#           labs(title = "Significant Terms annotated for SHH (mouseIC) ", x="q-value Bonferroni", y="Name"))
+# dev.off()
+# 
+
+
+# Box Plot of differentially expressed genes
+
+col.ordered <- c(colnames(ortmouseMYC),colnames(ortmouseSHH))
+mouseKord <- mouseK[, col.ordered]
+colnames(mouseKord)
+
+
+# Genes to plot
+genesSHH.over <- c("Sox2", "Ascl1", "Otx2", "Fabp7", "Pou3f3", "Mycn")
+genesMYC.over <- c("Myo1c", "Xaf1", "Stat6", "Bmp4")
+
+genesMYC.over %in% rownames(mouseK)
+
+# Boxplots
+# we need to convert the dataframe to a layout we can use with boxplot
+# gene value condition
+# g1  2 disease
+# g1 0 control
+
+boxplot.GGplot <- function(genes){
+  
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(mouseKord)))))
+  value <- as.vector(t(exprs(mouseKord)[genes,]))
+  condition <- rep(c(rep("MYC", length(colnames(ortmouseMYC))), rep("SHH", length(colnames(ortmouseSHH)))),length(genes))
+  df.boxplot <- data.frame(gene , value, condition)
+
+  p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Normalized gene expression") +
+    scale_x_discrete(name = "Gene") +
+    ggtitle("Boxplot of genes of interest by subgroup") +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 12)) +
+    scale_fill_manual(values=c("#FF0000FF", "orange"))
+    #scale_fill_brewer(palette = "Accent")
+  return(p)
+} 
+
+
+tiff("boxplot_genes_SHHover.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesSHH.over))
+dev.off()
+
+tiff("boxplot_genes_MYCover.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesMYC.over))
+dev.off()
+
+
+
+
+# Boxplot with significance level for Kornelius and Natalia (18.06.18)
+
+# we need to convert the dataframe to a layout we can use with boxplot
+# gene value condition
+# g1  2 disease
+# g1 0 control
+
+genes.microglia <- c("Aif1","Itgam", "Cd68", "Hla-drb1", "Hla-dra", "Tmem119")
+genes.dc <- c("Itgax","Itgae")
+genes.macroph <- c("Adgre1", "Cd68", "Cd163", "Msr1", "Csf1r", "Fcgr1", "Ctsd")
+genes.natalia <- c("Dnmt1", "Dnmt3a")
+
+genes.microglia %in% featureNames(mouseKord)
+genes.microglia <- c("Aif1","Itgam", "Cd68", "Tmem119")
+genes.dc %in% featureNames(mouseKord)
+genes.macroph %in% featureNames(mouseKord)
+genes.natalia %in% featureNames(mouseKord)
+# oder alphabetical
+genes.microglia <- genes.microglia[order(genes.microglia)]
+genes.dc <- genes.dc[order(genes.dc)]
+genes.macroph <- genes.macroph[order(genes.macroph)]
+genes.natalia <- genes.natalia[order(genes.natalia)]
+
+# Assign pheno to mouseKord
+
+mouseKord$clust <- c(rep("MYC", length(colnames(ortmouseMYC))), rep("SHH", length(colnames(ortmouseSHH))))
+
+# Microglia
+gene <- unlist(lapply(genes.microglia, function(i) rep(i,length(colnames(mouseKord)))))
+value <- as.vector(t(exprs(mouseKord)[genes.microglia,]))
+condition <- rep(mouseKord$clust, length(genes.microglia)) 
+
+df.boxplot <- data.frame(gene , value, condition)
+
+# DCs
+gene <- unlist(lapply(genes.dc, function(i) rep(i,length(colnames(mouseKord)))))
+value <- as.vector(t(exprs(mouseKord)[genes.dc,]))
+condition <- rep(mouseKord$clust, length(genes.dc)) 
+
+df.boxplot <- data.frame(gene , value, condition)
+
+# Macrophages
+gene <- unlist(lapply(genes.macroph, function(i) rep(i,length(colnames(mouseKord)))))
+value <- as.vector(t(exprs(mouseKord)[genes.macroph,]))
+condition <- rep(mouseKord$clust, length(genes.macroph)) 
+
+df.boxplot <- data.frame(gene , value, condition)
+
+# Natalia
+gene <- unlist(lapply(genes.natalia, function(i) rep(i,length(colnames(mouseKord)))))
+value <- as.vector(t(exprs(mouseKord)[genes.natalia,]))
+condition <- rep(mouseKord$clust, length(genes.natalia)) 
+
+df.boxplot <- data.frame(gene , value, condition)
+
+# Add significance levels to the boxplots
+genes.of.int <- genes.natalia
+n.comp <- 1
+label.tot <- ""
+for(i in 1:length(genes.of.int)){
+  label.partial <- rep("", n.comp)
+  for(j in 1:n.comp){
+    limmaRes <- topTable(fit, coef= j, adjust.method = "BH", n = Inf, sort.by = "P", p.value = 0.05)
+    if(genes.of.int[i] %in% rownames(limmaRes)){
+      if(limmaRes[genes.of.int[i], "adj.P.Val"] < 0.01)
+        label <- "***"
+      else
+        label <- "**"
+    } else{ 
+      label <- "ns"
+    }
+    label.partial[j] <- label
+  }
+  label.tot <- c(label.tot, label.partial)
+}
+
+
+
+
+annotation_df <- data.frame(gene = rep(genes.of.int, times = 1, each = n.comp), 
+                            start = rep(1:length(genes.of.int), times = 1, each = n.comp) - 0.2, 
+                            end= rep(1:length(genes.of.int), times = 1, each = n.comp) + 0.2,
+                            y = rep(12, length(genes.of.int)),
+                            label= label.tot[-1])
+
+
+
+
+p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  ylab("Normalized gene expression") +
+  scale_x_discrete(genes.of.int, name = "Gene") +
+  ggtitle("Boxplot interesting genes by condition ('***' = adj.pvalue < 0.01, '**' = adj.pvalue < 0.05, 'ns' = not significant)") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 14)) +
+  scale_fill_brewer(palette = "Accent") +
+  geom_signif(annotations = annotation_df$label,
+              y_position = annotation_df$y, xmin = annotation_df$start, xmax = annotation_df$end,
+              textsize=6) +
+  ylim(NA, 14)
+
+
+tiff("boxplot_dnmt.tiff", width = 1500, height = 800)
+print(p)
+dev.off()
+
+
+
+
+
+
+
+
+# #tiff("boxplot_SHHupreg.tiff", width = 1350, height = 900)
+# tiff("boxplot_SHHupreg.tiff", width = 1350, height = 900)
+# 
+# par(mfrow = c(2,3))
+# par(cex.lab = 2) 
+# par(cex.axis = 2)
+# par(cex.main = 2.5)
+# par(mar = c(10,10,5,5))
+# # Ascl1
+# boxplot(as.vector(exprs(ortmouseMYC["Ascl1",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Ascl1", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Ascl1",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Gli2
+# boxplot(as.vector(exprs(ortmouseMYC["Gli2",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Gli2", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Gli2",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# 
+# # Sox2
+# boxplot(as.vector(exprs(ortmouseMYC["Sox2",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Sox2", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Sox2",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Otx2
+# boxplot(as.vector(exprs(ortmouseMYC["Otx2",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Otx2", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Otx2",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Fabp7
+# boxplot(as.vector(exprs(ortmouseMYC["Fabp7",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Fabp7", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Fabp7",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Pou3f3
+# boxplot(as.vector(exprs(ortmouseMYC["Pou3f3",])), at = 1, xlim = c(0.5,2.5), ylim = c(-1.5,4),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Pou3f3", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Pou3f3",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# dev.off()
+# 
+# #tiff("boxplot_MYCupreg.tiff", width = 1350, height = 900)
+# tiff("boxplot_MYCupreg.tiff", width = 1350, height = 900)
+# par(mfrow = c(2,2))
+# par(cex.lab = 2) 
+# par(cex.axis = 2)
+# par(cex.main = 2.5)
+# par(mar = c(10,10,5,5))
+# # Xaf1
+# boxplot(as.vector(exprs(ortmouseMYC["Xaf1",])), at = 1, xlim = c(0.5,2.5), ylim = c(-3,3),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Xaf1", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Xaf1",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Stat6
+# boxplot(as.vector(exprs(ortmouseMYC["Stat6",])), at = 1, xlim = c(0.5,2.5), ylim = c(-3,3),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Stat6", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Stat6",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Myo1c
+# boxplot(as.vector(exprs(ortmouseMYC["Myo1c",])), at = 1, xlim = c(0.5,2.5), ylim = c(-3,3),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Myo1c", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Myo1c",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# 
+# # Irf7
+# boxplot(as.vector(exprs(ortmouseMYC["Irf7",])), at = 1, xlim = c(0.5,2.5), ylim = c(-3,3),col = "darkturquoise", names= "MYC", show.names=TRUE, main = "Irf7", ylab = "relative gene expression")
+# boxplot(as.vector(exprs(ortmouseSHH["Irf7",])), at = 2, col = "firebrick1", names= "SHH", show.names=TRUE, add = T)
+# dev.off()
+
+
+
+```
+
+
+# DE analysis SHH (IC) vs MYC (IC+EC)
+
+
+```{r diffeK}
+# take mouse dataset before the calculation of relative value
+mouse4de <- mouse_RT
+head(mouse4de)
+mouse4de <- collapseByMedian(mouse4de, "symbol")
+dim(mouse4de)
+pData(mouse4de)[, "type"] <- class.subgroups[, "Classification"]
+
+
+mouse4de <- mouse4de[,order(mouse4de$type)]
+pheno <- mouse4de$type
+
+
+#differential expression analysis using limma
+
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("MYC", "SHH")
+contrast.matrix <- makeContrasts(MYC-SHH, levels = design)
+fit <- lmFit(mouse4de, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+#get full differential expression output table, sorted by p-value
+limmaResMYC_SHH.all <- topTable(fit, coef= 1, adjust.method = "BH", n = Inf, sort.by = "P")
+
+adjpcutoff <- 0.05
+limmaRes.sigMYC_SHH.all <- subset(limmaResMYC_SHH.all, adj.P.Val < adjpcutoff)
+
+
+write.xlsx(limmaRes.sigMYC_SHH.all, "DElistMYC-SHHall.xlsx") 
+
+# Volcano plot for limma
+myvolcanoPlot <- function(limmaRes, logFC, qval){
+  subset_limma <- limmaRes[, c("symbol","logFC","adj.P.Val")]
+  colnames(subset_limma) <- c("gene","log2FoldChange","q_value")
+  with(subset_limma, plot(log2FoldChange, -log10(q_value), pch=20, main="Volcano plot DE genes MYC+eRT vs SHH"))
+
+  # Add colored points: red if adj.P.Val<0.001, orange if log2FC>3, green if both)
+  with(subset(subset_limma, q_value<qval ), points(log2FoldChange, -log10(q_value), pch=20, col="red"))
+  with(subset(subset_limma, abs(log2FoldChange)>logFC), points(log2FoldChange, -log10(q_value), pch=20,
+                                                               col="orange"))
+  with(subset(subset_limma, q_value<qval & abs(log2FoldChange)>logFC), points(log2FoldChange, -log10(q_value),
+                                                                              pch=20, col="green"))
+  with(subset(subset_limma, q_value<qval & abs(log2FoldChange)>logFC), textxy(log2FoldChange,
+                                                                         -log10(q_value),labs=gene[1:30], cex=.8))
+}
+
+
+tiff("volcanoMYCEC_SHH.tiff", width = 900, height = 700)
+myvolcanoPlot(limmaResMYCEC_SHH, 2, 0.05)
+dev.off()
+
+
+# volcano ggplot2
+
+library("ggplot2") 
+library("ggrepel") #Avoid overlapping labels
+library("plyr")
+genesH <- grep("Hox", rownames(mouseK), value = T)
+
+mutateddf <- mutate(limmaResMYCEC_SHH, sig=ifelse(limmaResMYCEC_SHH$adj.P.Val<0.05, "padj<0.05", "Not Sig"))
+mutateddf$sig[abs(limmaResMYCEC_SHH$logFC)>2] <-  "|logFC|>2"
+df.name <- rbind(mutateddf[1:20,], mutateddf[genesH,])
+df.name <- subset(df.name, df.name$sig != "Not Sig")
+volc = ggplot(mutateddf, aes(logFC, -log10(adj.P.Val))) + 
+    geom_point(aes(col=sig)) + 
+    scale_color_manual(values=c("gray69", "red", "green")) + 
+    ggtitle("Volcano plot DE genes MYC+eRT vs SHH") 
+volc+geom_text_repel(data=df.name, aes(label=symbol)) #adding text for the top 20 genes
+ggsave("volcanoplotMYCEC_SHH_hox.tiff", device="tiff") #In case you want to easily save to disk
+
+
+
+
+
+
+
+# subset to genes with adjusted p-value cutoff= 0.01, that is, since we used BH method, the expected 
+# proportion of false discoveries in the selected group is controlled to be less than the threshold, in
+# this case 1 every 100 genes
+adjpcutoff <- 0.05
+limmaRes.sigMYCEC_SHH <- subset(limmaResMYCEC_SHH, adj.P.Val < adjpcutoff)
+
+
+
+
+topGenes.upMYCEC_SHH <- subset(limmaRes.sigMYCEC_SHH, logFC>2)
+topGenes.downMYCEC_SHH <- subset(limmaRes.sigMYCEC_SHH, logFC<(-2))
+
+
+write.xlsx(topGenes.upMYCEC_SHH, "topGenes.upMYCEC-SHH.xlsx") 
+write.xlsx(topGenes.downMYCEC_SHH, "topGenes.downMYCEC-SHH.xlsx") 
+
+
+
+# Display toppgene
+toppg.resMYCEC <- read.table(file = "Toppgene/MYCECvsSHH.txt", header = T, sep = "\t")
+
+res <- subset(toppg.resMYCEC, toppg.resMYCEC$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationMYCeRT_GOterms_vsSHH.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for MYC+eRT ", x="q-value Bonferroni", y="Name"))
+dev.off()
+
+
+
+toppg.resSHH <- read.table(file = "Toppgene/SHHvsMYCEC.txt", header = T, sep = "\t")
+
+res <- subset(toppg.resSHH, toppg.resSHH$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationSHH_GOterms_vsMYCeRT.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for SHH ", x="q-value Bonferroni", y="Name"))
+dev.off()
+```
+
+
+# 3 DE analysis MYC (IC) vs MYC (EC)
+
+
+```{r diffe3}
+# take mouse dataset before the calculation of relative value
+
+mouse4de_MYC <- mouse4de[, mouse4de$type == "MYC"]
+dim(mouse4de_MYC)
+
+ICsamples <- rownames(MpData)[MpData$localization == "intracranial"]
+pData(mouse4de_MYC)[, "localization"] <- "EC"
+pData(mouse4de_MYC)[colnames(mouse4de_MYC) %in% ICsamples, "localization"] <- "IC"
+pData(mouse4de_MYC)
+
+
+
+mouse4de_MYC <- mouse4de_MYC[,order(mouse4de_MYC$localization)]
+pheno <- mouse4de_MYC$localization
+
+
+#differential expression analysis using limma
+
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("EC", "IC")
+contrast.matrix <- makeContrasts(EC-IC, levels = design)
+fit <- lmFit(mouse4de_MYC, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+#get full differential expression output table, sorted by p-value
+limmaResMYC_ECvsIC <- topTable(fit, coef= 1, adjust.method = "BH", n = Inf, sort.by = "P")
+
+adjpcutoff <- 0.05
+limmaRes.sigMYC_ECvsIC <- subset(limmaResMYC_ECvsIC, adj.P.Val < adjpcutoff)
+
+
+write.xlsx(limmaRes.sigMYC_ECvsIC, "DElistMYC_ECvsIC.xlsx") 
+
+```
+
+# Boxplots Kornelius 
+
+```{r bplotK}
+
+mouseK <- mouse_RT
+mouseK <- collapseByMedian(mouseK, "symbol")
+rownames(mouseK)
+colnames(mouseK)
+col.ordered <- c(colnames(ortmouseMYC),colnames(ortmouseSHH),colnames(ortmouse_RText))
+mouseKord <- mouseK[, col.ordered]
+colnames(mouseKord)
+
+dim.myc <- length(colnames(ortmouseMYC))
+dim.shh <- length(colnames(ortmouseSHH))
+dim.eRT <- length(colnames(ortmouse_RText))
+
+mouseKord$clust <- c(rep("MYC_IC", dim.myc), rep("SHH_IC",dim.shh), rep("MYC_EC", dim.eRT))
+
+
+#differential expression analysis using limma
+library(limma)
+
+design <- model.matrix(~0 + factor(mouseKord$clust))
+colnames(design)
+colnames(design) <- c("MYC_EC", "MYC_IC", "SHH_IC")
+contrast.matrix <- makeContrasts(MYC_IC-MYC_EC, MYC_IC-SHH_IC, SHH_IC-MYC_EC, levels = design)
+fit <- lmFit(mouseKord, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+
+
+# Genes to plot
+genesH <- c("Hotair", grep("Hox", rownames(mouseK), value = T))
+
+other.genes <- c("Myo1c","Stat6", "Sox1", "Sox2", "Ascl1", "Gli2", "Otx1", "Otx2", "Pou3f3", "Fabp7")
+other.genes %in% rownames(mouseK)
+
+# Boxplots
+# we need to convert the dataframe to a layout we can use with boxplot
+# gene value condition
+# g1  2 disease
+# g1 0 control
+
+boxplot.GGplot <- function(genes){
+  
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(mouseKord)))))
+  value <- as.vector(t(exprs(mouseKord)[genes,]))
+  condition <- rep(c(rep("MYC-IC", dim.myc), rep("SHH-IC", dim.shh), rep("eRT", dim.eRT)),length(genes))
+  df.boxplot <- data.frame(gene , value, condition)
+
+  p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Normalized gene expression") +
+    scale_x_discrete(name = "Gene") +
+    ggtitle("Boxplot of genes of interest by subgroup") +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 12)) +
+    scale_fill_manual(values=c("#FF0000FF", "orange", "darkred"))
+    #scale_fill_brewer(palette = "Accent")
+  return(p)
+} 
+
+
+
+tiff("boxplot_genesH_1.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesH[1:11]))
+dev.off()
+
+tiff("boxplot_genesH_2.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesH[12:22]))
+dev.off()
+
+tiff("boxplot_genesH_3.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesH[23:33]))
+dev.off()
+
+tiff("boxplot_genesH_4.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(genesH[34:44]))
+dev.off()
+
+tiff("boxplot_other_genes.tiff", width = 1000, height = 600)
+print(boxplot.GGplot(other.genes))
+dev.off()
+
+
+# Genes Natalia (19.06.18)
+genes.Nat <- c("Dnmt1", "Dnmt3a")
+
+gene <- unlist(lapply(genes.Nat, function(i) rep(i,length(colnames(mouseKord)))))
+value <- as.vector(t(exprs(mouseKord)[genes.Nat,]))
+condition <- rep(mouseKord$clust,length(genes.Nat))
+df.boxplot <- data.frame(gene , value, condition)
+
+# Add significance levels to the boxplots
+n.comp <- 3
+label.tot <- ""
+for(i in 1:length(genes.Nat)){
+  label.partial <- rep("", n.comp)
+  for(j in 1:n.comp){
+    limmaRes <- topTable(fit, coef= j, adjust.method = "BH", n = Inf, sort.by = "P", p.value = 0.05)
+    if(genes.Nat[i] %in% rownames(limmaRes)){
+      if(limmaRes[genes.of.int[i], "adj.P.Val"] < 0.01)
+        label <- "***"
+      else
+        label <- "**"
+    } else{ 
+      label <- "ns"
+    }
+    label.partial[j] <- label
+  }
+  label.tot <- c(label.tot, label.partial)
+}
+
+
+
+start.mesh <- c(-0.25, 0, -0.25)
+end.mesh <- c(0, 0.25, 0.25)
+annotation_df <- data.frame(gene = rep(genes.Nat, times = 1, each = n.comp), 
+                            start = rep(1:length(genes.Nat), times = 1, each = n.comp) + start.mesh, 
+                            end= rep(1:length(genes.Nat), times = 1, each = n.comp) + end.mesh,
+                            y = rep(c(9.5,10,10.5), length(genes.Nat)),
+                            label= label.tot[-1])
+
+
+
+
+p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  ylab("Normalized gene expression") +
+  scale_x_discrete(genes.Nat, name = "Gene") +
+  ggtitle("Boxplot interesting genes by condition ('***' = adj.pvalue < 0.01, '**' = adj.pvalue < 0.05, 'ns' = not significant)") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 14)) +
+  scale_fill_brewer(palette = "Accent") +
+  geom_signif(annotations = annotation_df$label,
+              y_position = annotation_df$y, xmin = annotation_df$start, xmax = annotation_df$end,
+              textsize=6) +
+  ylim(NA, 11)
+
+
+tiff("boxplot_dnmt3cond.tiff", width = 1500, height = 800)
+print(p)
+dev.off()
+
+```
+
+# Boxplots Kool
+
+
+```{r bk}
+hox.genes <- rownames(exprs(MYC.samples))[grep("Hox", rownames(exprs(MYC.samples)))]
+genes.kool <- c("Myc", "Gli2", "Mycn", "Tyr")
+genes.kool %in% rownames(exprs(MYC.samples))
+
+
+# create another variable
+mouse.MYC.icec.rel <- MYC.samples
+mouse.SHH.ic.rel <- ortmouseSHH
+human.rel <- orthuman_atrt
+
+
+
+pData(mouse.MYC.icec.rel)[, "type"] <- NULL
+pData(mouse.MYC.icec.rel)[, "cluster"] <- NULL
+colnames(pData(mouse.MYC.icec.rel)) <- "type"
+
+ec.names <- mouse.MYC.icec.rel$type == "extracranial"
+
+pData(mouse.MYC.icec.rel)[ec.names, "type"] <- "mouseEC - MYC"
+pData(mouse.MYC.icec.rel)[!ec.names, "type"] <- "mouseIC - MYC"
+
+
+pData(mouse.SHH.ic.rel)[, "cluster"] <- NULL
+pData(mouse.SHH.ic.rel)[, "type"] <- "mouseIC - SHH"
+
+
+rownames(human.rel) <- rownames(mouse.MYC.icec.rel)
+pData(human.rel)
+
+human.rel.shh <- human.rel[, human.rel$type == "humanATRT_SHH"]
+human.rel.tyr <- human.rel[, human.rel$type == "humanATRT_TYR"]
+human.rel.myc <- human.rel[, human.rel$type == "humanATRT_MYC"]
+dim(human.rel.shh)
+
+
+myc.box.data <- combineTwoExpressionSet(human.rel.myc,mouse.MYC.icec.rel)
+myc.box.data <- combineTwoExpressionSet(myc.box.data,mouse.SHH.ic.rel)
+
+
+# HOX CLUSTER
+
+gene <- unlist(lapply(hox.genes, function(i) rep(i,length(colnames(myc.box.data)))))
+value <- as.vector(t(exprs(myc.box.data)[hox.genes,]))
+condition <- rep(myc.box.data$type, length(hox.genes))
+
+df.boxplot <- data.frame(gene , value, condition)
+
+p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  scale_y_continuous(name = "Relative gene expression") +
+  scale_x_discrete(name = "") +
+  ggtitle("Boxplot HOX cluster genes in human and mouse samples") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 12,angle = 30, hjust = 1, vjust = 0.5))+ 
+  
+  scale_fill_manual(values=c("#FF0000FF", "indianred1", "red4", "orange"))
+  #scale_fill_brewer(palette = "Accent")
+  
+
+
+#tiff("boxplot_HOX_humanmouse.tiff", width = 1400, height = 600)
+tiff("boxplot_HOX_humanmouse.tiff", width = 1400, height = 600)
+print(p)
+dev.off()
+
+
+# OTHER MARKERS
+
+all.box.data <- combineTwoExpressionSet(mouse.MYC.icec.rel,mouse.SHH.ic.rel)
+all.box.data <- combineTwoExpressionSet(all.box.data, human.rel)
+
+
+gene <- unlist(lapply(genes.kool, function(i) rep(i,length(colnames(all.box.data)))))
+value <- as.vector(t(exprs(all.box.data)[genes.kool,]))
+condition <- rep(all.box.data$type, length(genes.kool))
+
+df.boxplot <- data.frame(gene , value, condition)
+
+p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  scale_y_continuous(name = "Relative gene expression") +
+  scale_x_discrete(limits = genes.kool) +
+  ggtitle("Boxplot marker genes in human and mouse samples") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 12))+
+  
+  scale_fill_manual(values=c("#FF0000FF", "orange", "forestgreen", "indianred1", "red4", "tan1"))
+  #scale_fill_brewer(palette = "Accent")
+  
+
+
+#tiff("boxplot_Kool_humanmouse.tiff", width = 1000, height = 600)
+tiff("boxplot_Kool_humanmouse.tiff", width = 1000, height = 600)
+print(p)
+dev.off()
+
+```
+
+# Mouse Extracranial: considering 2 groups TYR vs MYC DE analysis
+
+```{r deextrt}
+## let's order samples by the phenotype
+rownames(ortmouse_RText) <- fData(ortmouse_RText)$symbol
+ortmouse_RText <- ortmouse_RText[,order(ortmouse_RText$cluster4g)]
+pheno <- ortmouse_RText$cluster4g
+
+#differential expression analysis using limma
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("MYC", "TYR")
+contrast.matrix <- makeContrasts(MYC-TYR, levels = design)
+fit <- lmFit(ortmouse_RText, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+#get full differential expression output table, sorted by p-value
+limmaResMYC_TYR <- topTable(fit, coef= 1, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+
+# Volcano plot for limma
+
+myvolcanoPlot(limmaResMYC_TYR, 1.5, 0.05)
+
+
+# subset to genes with adjusted p-value cutoff= 0.01, that is, since we used BH method, the expected 
+# proportion of false discoveries in the selected group is controlled to be less than the threshold, in
+# this case 1 every 100 genes
+adjpcutoff <- 0.05
+limmaRes.sigMYC_TYR <- subset(limmaResMYC_TYR, adj.P.Val < adjpcutoff)
+
+
+
+
+topGenes.upMYC_TYR <- subset(limmaRes.sigMYC_TYR, logFC>1.5)
+topGenes.downMYC_TYR <- subset(limmaRes.sigMYC_TYR, logFC<(-1.5))
+
+
+write.xlsx(topGenes.upMYC_TYR, "topGenes.upMYC-TYR_mouseEC.xlsx") 
+write.xlsx(topGenes.downMYC_TYR, "topGenes.downMYC-TYR_mouseEC.xlsx") 
+
+
+##### Functional with Toppgene
+# Import ToppGene results
+# MYC
+toppg.resMYC <- read.table(file = "Toppgene/MYC_EC.txt", header = T, sep = "\t")
+res <- subset(toppg.resMYC, toppg.resMYC$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationMYC_mouseEC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for MYC (mouseEC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# only go terms
+toppg.resMYC.GO <- toppg.resMYC[grep("GO",toppg.resMYC$Category),]
+res <- subset(toppg.resMYC.GO, toppg.resMYC.GO$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationMYC_GOterms_mouseEC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for MYC (mouseEC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+
+
+# TYR     q value not < 0.05
+toppg.resSHH <- read.table(file = "Toppgene/TYR_EC.txt", header = T, sep = "\t")
+res <- subset(toppg.resSHH, toppg.resSHH$q.value.Bonferroni<0.1)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationTYR_mouseEC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for TYR (mouseEC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# only go terms
+toppg.resSHH.GO <- toppg.resSHH[grep("GO",toppg.resSHH$Category),]
+res <- subset(toppg.resSHH.GO, toppg.resSHH.GO$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationTYR_GOterms_mouseEC.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for TYR (mouseEC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+
+```
+
+
+
+# Second step: considering all MYC mouse sample look for DE genes in IC vs EC
+
+```{r deicec}
+MYC.samplesIC <- ortmouse_RTintr[,ortmouse_RTintr$cluster == "MYC"]
+pData(MYC.samplesIC)$localization <- "intracranial"
+MYC.samplesEC <- ortmouse_RText[,]
+pData(MYC.samplesEC) <- pData(MYC.samplesEC)[, !colnames(pData(MYC.samplesEC)) %in% "cluster4g"]
+pData(MYC.samplesEC)$localization <- "extracranial"
+
+
+mouse.MYC <- combineTwoExpressionSet(MYC.samplesEC, MYC.samplesIC)
+
+
+## let's order samples by the phenotype
+mouse.MYC <- mouse.MYC[,order(mouse.MYC$localization)]
+pheno <- mouse.MYC$localization
+
+#differential expression analysis using limma
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("EC", "IC")
+contrast.matrix <- makeContrasts(IC-EC, levels = design)
+fit <- lmFit(mouse.MYC, design)
+fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+head(fit$coefficients)
+summary(decideTests(fit, adjust.method = "BH", p.value = 0.05))
+
+#get full differential expression output table, sorted by p-value
+limmaRes <- topTable(fit, coef= 1, adjust.method = "BH", n = Inf, sort.by = "P")
+
+# Volcano plot for limma
+myvolcanoPlot(limmaRes, 1.5, 0.05)
+
+
+# subset to genes with adjusted p-value cutoff= 0.01, that is, since we used BH method, the expected 
+# proportion of false discoveries in the selected group is controlled to be less than the threshold, in
+# this case 1 every 100 genes
+adjpcutoff <- 0.05
+limmaRes.sig_mouseMYC_IC_EC <- subset(limmaRes, adj.P.Val < adjpcutoff)
+
+
+
+topGenes.up.mousemyc.IC_EC <- subset(limmaRes.sig_mouseMYC_IC_EC, logFC>1.2)
+topGenes.down.mousemyc.IC_EC <- subset(limmaRes.sig_mouseMYC_IC_EC, logFC<(-1.2))
+
+
+
+write.xlsx(topGenes.up.mousemyc.IC_EC, "topGenes.up.mousemyc.IC_EC.xlsx") 
+write.xlsx(topGenes.down.mousemyc.IC_EC, "topGenes.down.mousemyc.IC_EC.xlsx") 
+
+
+##### FUnctional with Toppgene
+# Import ToppGene results
+# MYC IC
+toppg.resMYC.IC <- read.table(file = "Toppgene/allMYC_IC.txt", header = T, sep = "\t")
+res <- subset(toppg.resMYC.IC, toppg.resMYC.IC$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationIC_myc.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for IC mouse (MYC)", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# only go terms
+toppg.resMYC.IC.GO <- toppg.resMYC.IC[grep("GO",toppg.resMYC.IC$Category),]
+res <- subset(toppg.resMYC.IC.GO, toppg.resMYC.IC.GO$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationIC_mycGOterms.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for IC mouse (MYC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+
+
+# MYC EC
+toppg.resMYC.EC <- read.table(file = "Toppgene/allMYC_EC.txt", header = T, sep = "\t")
+res <- subset(toppg.resMYC.EC, toppg.resMYC.EC$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationEC_myc.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for EC mouse (MYC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+  
+# only go terms
+toppg.resMYC.EC.GO <- toppg.resMYC.EC[grep("GO",toppg.resMYC.EC$Category),]
+res <- subset(toppg.resMYC.EC.GO, toppg.resMYC.EC.GO$q.value.Bonferroni<0.05)
+res <- res[order(res$q.value.Bonferroni),]
+if(nrow(res)>=30){
+    res <- res[1:30,]
+}
+tiff(filename = "annotationECmyc_GOterms.tiff", height = 800, width = 1500)
+print(ggplot(data = res, aes(x = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), color = Category)) +
+          geom_segment( aes(x = 0, xend = q.value.Bonferroni, y = reorder(Name, -q.value.Bonferroni), yend=reorder(Name, -q.value.Bonferroni)), size = 2) +
+          geom_point(size = 3) + theme_light(base_size = 12) + theme(axis.text.x=element_text(size=rel(1.5)), axis.text.y = element_text(size = rel(1.5)), axis.title = element_text(size = rel(0.5)), title = element_text(size = rel(2)), legend.text=element_text(size=rel(1.5))) +
+          labs(title = "Significant Terms annotated for EC mouse (MYC) ", x="q-value Bonferroni", y="Name"))
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+
+# Comparison with other tumor entities (29.04.20)
+We want to cluster our intracranial mouse tumors with human glioblastoma, ependymoma and medulloblastoma.
+We will consider the following datasets:
+ - Medulloblastoma
+Datasets for human medulloblastoma are taken from the paper from Poschl et al.2014 ("Genomic and transcriptomic analyses match medulloblastoma mouse models to their human counterpart") We consider 3 different datasets:
+* GSE10327, 62 samples
+* GSE12992, 40 samples
+* GSE49243, 73 samples
+
+ - Glioblastoma
+Datasets for glioblastoma are taken from Sturm et al. 2012 ("Hotspots mutations in H3F3A and IDH1 define distinct epigenetic and biological subgroups of gliblastoma")
+* GSE36245, 46 human samples
+* GSE34824, 27 human samples
+
+- Ependymoma
+Dataset taken from Pajtler et al.2015 ("Molecular classification of ependymal tumors across all CNS compartments..")
+* GSE64415, 209 ependymoma human samples
+
+## Read and normalize human medulloblastoma datasets
+Here we read and normalize each dataset individually using the RMA algorithm.
+```{r RMAmedu}
+# dataset1 
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_MB/GSE10327_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse10327_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+# dataset 2
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_MB/GSE12992_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse12992_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+# dataset 3
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_MB/GSE49243_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse49243_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+
+
+#normalizing the data using RMA algorithm
+gse10327 <- rma(gse10327_raw)
+gse12992 <- rma(gse12992_raw)
+gse49243 <- rma(gse49243_raw)
+
+
+#checking boxplot of normalized data
+nSamples <- ncol(gse10327) + ncol(gse12992) + ncol(gse49243)
+boxplot(exprs(gse10327), at = 1:62, xlim = c(0,nSamples), col = "red")
+boxplot(exprs(gse12992), at = 63:102, col= "green", add= TRUE)
+boxplot(exprs(gse49243), at = 103:175, col= "blue", add= TRUE)
+
+```
+
+
+```{r combatmedu}
+# Correct for batch effect using combat
+# add dataset in pheno
+gse10327$dataset <- "gse10327"
+gse12992$dataset <- "gse12992"
+gse49243$dataset <- "gse49243"
+combinedDBmedullo <- combineTwoExpressionSet(gse10327, gse12992)
+combinedDBmedullo <- combineTwoExpressionSet(combinedDBmedullo, gse49243)
+batch <- combinedDBmedullo$dataset
+modcombat = model.matrix(~1, data=combinedDBmedullo)
+combat_edata = ComBat(dat=exprs(combinedDBmedullo), batch=batch, mod=modcombat)
+boxplot(combat_edata)
+exprs(combinedDBmedullo) <- combat_edata
+
+
+# remove negative values
+exprs(combinedDBmedullo)[which(exprs(combinedDBmedullo)<0)] <- 0
+boxplot(exprs(combinedDBmedullo))
+
+```
+
+## Annotate human probeset
+```{r biomartmed}
+# human medulloblastoma
+
+rows.match<-match(featureNames(combinedDBmedullo), mapping$affy_hg_u133_plus_2)
+fdat.new<-cbind(fData(combinedDBmedullo), mapping[rows.match,])
+fData(combinedDBmedullo)<-fdat.new
+
+
+#merge multiple probes
+human_medullo<-collapseByMedian(combinedDBmedullo, "ensembl_gene_id")
+dim(human_medullo)
+human_medullo$type <- "human_medulloblastoma"
+# keep only orthologous genes 
+orthuman_medullo <- human_medullo[humanGene,]
+dim(orthuman_medullo)
+
+# Fix pData
+pData(orthuman_medullo)$cluster <- "MB"
+```
+
+
+## Read and normalize human glioblastoma datasets
+Here we read and normalize each dataset individually using the RMA algorithm.
+
+```{r RMAgliob}
+# dataset1 
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_glioblastoma/GSE36245_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse36245_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+# dataset 2
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_glioblastoma/GSE34824_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse34824_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+
+
+#normalizing the data using RMA algorithm
+gse36245 <- rma(gse36245_raw)
+gse34824 <- rma(gse34824_raw)
+
+
+
+#checking boxplot of normalized data
+nSamples <- ncol(gse36245) + ncol(gse34824)
+boxplot(exprs(gse36245), at = 1:46, xlim = c(0,nSamples), col = "red")
+boxplot(exprs(gse34824), at = 47:73, col= "green", add= TRUE)
+
+
+```
+
+```{r combatglio}
+# Correct for batch effect using combat
+# add dataset in pheno
+gse36245$dataset <- "gse36245"
+gse34824$dataset <- "gse34824"
+combinedDBglio <- combineTwoExpressionSet(gse36245, gse34824)
+
+batch <- combinedDBglio$dataset
+modcombat = model.matrix(~1, data=combinedDBglio)
+combat_edata = ComBat(dat=exprs(combinedDBglio), batch=batch, mod=modcombat)
+boxplot(combat_edata)
+exprs(combinedDBglio) <- combat_edata
+
+```
+
+## Annotate human probeset
+```{r biomartglio}
+# human glioblastoma
+
+rows.match<-match(featureNames(combinedDBglio), mapping$affy_hg_u133_plus_2)
+fdat.new<-cbind(fData(combinedDBglio), mapping[rows.match,])
+fData(combinedDBglio)<-fdat.new
+
+
+#merge multiple probes
+human_glioblastoma<-collapseByMedian(combinedDBglio, "ensembl_gene_id")
+dim(human_glioblastoma)
+human_glioblastoma$type <- "human_glioblastoma"
+# keep only orthologous genes 
+orthuman_glioblastoma <- human_glioblastoma[humanGene,]
+dim(orthuman_glioblastoma)
+
+
+# Fix pData
+pData(orthuman_glioblastoma)$cluster <- "GB"
+```
+
+
+## Read and normalize human ependymoma datasets
+Here we read and normalize each dataset individually using the RMA algorithm.
+
+```{r RMAepend}
+celList <- list.celfiles("/home/microarray/Natalia/Datasets/hum_ependymoma/GSE64415_RAW",
+                         full.names=TRUE, listGzipped= TRUE)
+gse64415_raw <- read.celfiles(celList, pkgname='pd.hg.u133.plus.2')
+
+
+#normalizing the data using RMA algorithm
+gse64415 <- rma(gse64415_raw)
+
+#checking boxplot of normalized data
+boxplot(exprs(gse64415))
+
+
+rows.match<-match(featureNames(gse64415), mapping$affy_hg_u133_plus_2)
+fdat.new<-cbind(fData(gse64415), mapping[rows.match,])
+fData(gse64415)<-fdat.new
+
+
+#merge multiple probes
+human_ependymoma<-collapseByMedian(gse64415, "ensembl_gene_id")
+dim(human_ependymoma)
+human_ependymoma$type <- "human_ependymoma"
+# keep only orthologous genes 
+orthuman_ependymoma <- human_ependymoma[humanGene,]
+dim(orthuman_ependymoma)
+
+
+# Fix pData
+pData(orthuman_ependymoma)$cluster <- "EP"
+```
+
+## DE analysis of our murine tumors + human ATRT + other brain tumors (ANOVA)
+
+
+```{r cnvorusm}
+# our tumors + human ATRT (orthologous genes)
+# restricting data to the list of orthologus gene
+orthuman_atrt_de <- human_atrt[humanGene,]
+ortmouse_RT_de <- mouse_RT[mouseGene,]
+dim(orthuman_atrt_de)
+dim(ortmouse_RT_de)
+# fix pheno type for human ATRT
+pData(orthuman_atrt_de)$type <- "human_ATRT"
+
+# Fix gene names: let's rename all genes by their HUMAN Ensembl gene id
+fData(ortmouse_RT_de)[1:5,]
+fData(orthuman_atrt_de)[1:5,]
+
+rownames(ortmouse_RT_de) <- rownames(orthuman_atrt_de)
+
+exprs(ortmouse_RT_de) <- relativeGeneExprs(ortmouse_RT_de)
+exprs(orthuman_atrt_de) <- relativeGeneExprs(orthuman_atrt_de)
+exprs(orthuman_medullo) <- relativeGeneExprs(orthuman_medullo)
+exprs(orthuman_glioblastoma) <- relativeGeneExprs(orthuman_glioblastoma)
+exprs(orthuman_ependymoma) <- relativeGeneExprs(orthuman_ependymoma)
+
+# Create a unique dataset
+brain.tumors <- combineTwoExpressionSet(orthuman_atrt_de, ortmouse_RT_de)
+pData(brain.tumors)$cluster <- "RT"
+
+brain.tumors <- combineTwoExpressionSet(brain.tumors, orthuman_medullo)
+brain.tumors <- combineTwoExpressionSet(brain.tumors, orthuman_glioblastoma)
+brain.tumors <- combineTwoExpressionSet(brain.tumors, orthuman_ependymoma)
+
+
+boxplot(brain.tumors)
+
+## pheno
+pheno <- brain.tumors$type
+unique(pheno)
+
+#differential expression analysis using limma
+design <- model.matrix(~0 + factor(pheno))
+colnames(design)
+colnames(design) <- c("ATRT", "EPE", "GLI", "MB", "mRT")
+#contrast.matrix <- makeContrasts(ATRT-EPE, ATRT-GLI, ATRT-MB, ATRT-mRT, EPE-GLI, EPE-MB, EPE-mRT, GLI-MB, GLI-mRT, MB-mRT, levels = design)
+fit <- lmFit(brain.tumors, design)
+#fit <- contrasts.fit(fit,contrast.matrix)
+fit <- eBayes(fit)
+#F.ratio <- fit$F
+#F.pvalue <- fit$F.p.value
+de_genes <- topTableF(fit, number = 16000, adjust.method = "BH", p.value = 0.05, sort.by = "F")
+
+
+
+
+```
+
+# Hierarchical clustering of mouseRT with other brain tumors
+
+```{r hclust}
+# get relative gene expression
+# brain.tumors.rel <- brain.tumors
+# exprs(brain.tumors.rel) <- relativeGeneExprs(brain.tumors.rel)
+
+# Restrict the analysis to the top 5000 genes from the DE analysis
+# brain.tumors_filt <- brain.tumors.rel[sample(rownames(de_genes), 5000),]
+# dim(brain.tumors_filt)
+
+brain.tumors_filt <- variationFilter(brain.tumors, 5000)
+
+annotation_col <- data.frame(type = brain.tumors_filt$type, row.names = colnames(brain.tumors_filt))
+#ann_colors = list(pseudotime = c("#140f8b", "#d2506f","#f0f921")) 
+
+library(pheatmap)
+library(RColorBrewer)
+pheatmap(exprs(brain.tumors_filt), color= colorRampPalette(brewer.pal(n = 5, name = "RdBu"))(5), scale = "none",  cluster_rows = F, cluster_cols = T, clustering_distance_cols = "correlation", clustering_method = "ward.D2", annotation_col = annotation_col, show_rownames = F, show_colnames = F, filename = "heatmap_brainTumors_varFilt.tiff",  width = 10, height = 6)
+
+
+
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- dist(t(exprs(brain.tumors_filt)), method = "euclidean")
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(ds_filtered$type))))
+
+
+colors <- labelColors[as.factor(ds_filtered$type)]
+tiff("dendromouseIC_medullo.tiff", width = 1500, height = 900)
+par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = "Dendrogram human medulloblastoma and murine samples (only intracranial)", cex.main= 2)
+colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+legend("topright", legend = levels(as.factor(ds_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+```
+
+
+# Glioblastoma
+
+```{r hclustglio}
+ds <- combineTwoExpressionSet(ortmouse_RTintr, orthuman_glioblastoma)
+dim(ds)
+
+
+# Restrict the analysis to the 5000 genes with the highest mad
+ds_filtered <- variationFilter(ds, 5000)
+dim(ds_filtered)
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- dist(t(exprs(ds_filtered)), method = "euclidean")
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(ds_filtered$type))))
+labelColors[1] <- "yellow"
+
+colors <- labelColors[as.factor(ds_filtered$type)]
+tiff("dendromouseIC_glio.tiff", width = 1500, height = 900)
+par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = "Dendrogram human glioblastoma and murine samples (only intracranial)", cex.main= 2)
+colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+legend("topright", legend = levels(as.factor(ds_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+```
+
+
+
+# Ependymoma
+
+```{r hclustep}
+ds <- combineTwoExpressionSet(ortmouse_RTintr,orthuman_ependymoma)
+dim(ds)
+
+
+# Restrict the analysis to the 5000 genes with the highest mad
+ds_filtered <- variationFilter(ds, 5000)
+dim(ds_filtered)
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- dist(t(exprs(ds_filtered)), method = "euclidean")
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(ds_filtered$type))))
+labelColors[1] <- "pink"
+
+colors <- labelColors[as.factor(ds_filtered$type)]
+tiff("dendromouseIC_epend.tiff", width = 1500, height = 900)
+par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = "Dendrogram human ependymoma and murine samples (only intracranial)", cex.main= 2)
+colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+legend("topright", legend = levels(as.factor(ds_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+```
+
+
+
+# Clustering all together (IC, human atrt,epe,medu,glio)
+
+```{r hclustall}
+# add col $cluster to orthuman_atrt to match with the orthers
+pData(orthuman_atrt)$cluster <- "ATRT"
+
+
+ds <- combineTwoExpressionSet(ortmouse_RTintr,orthuman_ependymoma)
+ds1 <- combineTwoExpressionSet(ds,orthuman_atrt)
+ds2 <- combineTwoExpressionSet(ds1,orthuman_glioblastoma)
+ds3 <- combineTwoExpressionSet(ds2, orthuman_medullo)
+dim(ds3)
+
+
+
+# Restrict the analysis to the 5000 genes with the highest mad
+ds_filtered <- variationFilter(ds3, 5000)
+dim(ds_filtered)
+## calculate distance matrix for columns: use euclidean
+distmatrix.col <- dist(t(exprs(ds_filtered)), method = "euclidean")
+## using ward clustering 
+hc.col <- hclust(distmatrix.col, method="ward.D2") 
+
+
+
+# Colored bars
+hcd <- as.dendrogram(hc.col)
+hcd <- dendextend::set(hcd, "labels", NA)
+
+labelColors <- rainbow(length(levels(as.factor(ds_filtered$type))))
+labelColors[3] <- "darkgreen"
+
+colors <- labelColors[as.factor(ds_filtered$type)]
+tiff("dendroALL.tiff", width = 1500, height = 900)
+par(mar=c(4.1,4.1,4.1,2.1))
+plot(hcd, main = "Dendrogram human and murine samples (only intracranial)", cex.main= 2)
+colored_bars(colors = colors, dend = hcd, rowLabels = NA, y_scale = 10)
+legend("topright", legend = levels(as.factor(ds_filtered$type)), col = labelColors, pch = 15, cex = 1.7)
+dev.off()
+
+```
+
+
+## Plot SOX2 mouse data (COO)
+
+```{r cniodg}
+
+mouse.sym <- collapseByMedian(mouse_RT, "symbol")
+
+# Read excel table with classification
+class.subgroups <- read_excel("/home/microarray/Natalia/Datasets/mouse_classification_subgroups.xlsx")
+rownames(class.subgroups) <- class.subgroups$Sample
+
+pData(mouse.sym)[, "subgroup"] <- class.subgroups[colnames(mouse.sym), "Classification"]
+pData(mouse.sym)[, "localization"] <- MpData[colnames(mouse.sym), "localization"]
+
+
+# SOX2
+SOX2_exp <- exprs(mouse.sym)["Sox2",]
+
+gene <- rep("Sox2", length(colnames(mouse.sym)))
+value <- SOX2_exp
+condition <- mouse.sym$subgroup
+localization <- mouse.sym$localization
+
+df.boxplot <- data.frame(gene , value, condition, localization)
+
+
+
+p <- ggplot(df.boxplot, aes(x = condition, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  scale_y_continuous(name = "Sox2 normalized expression") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 14)) 
+
+tiff("NM_mouse_Sox2_boxplot_subgroup.tiff", height = 600, width = 700)
+plot(p)
+dev.off()
+
+p2 <- ggplot(df.boxplot, aes(x = localization, y = value, fill = condition)) +
+  geom_boxplot(alpha=1) +
+  scale_y_continuous(name = "Sox2 normalized expression") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+        text = element_text(size = 12, family = "Tahoma"),
+        axis.title = element_text(face="bold"),
+        axis.text.x=element_text(size = 14)) 
+
+tiff("NM_mouse_Sox2_boxplot_subgroupBYloc.tiff", height = 600, width = 700)
+plot(p2)
+dev.off()
+
+```

@@ -1,0 +1,919 @@
+---
+title: "Mouse ATRT MYC spinal"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+library(pheatmap)
+library(biomaRt)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC")
+
+source("/marta_home/scRNAseq_Ranalysis/Seurat_v3/code/myaddModule_CellType.R")
+
+load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/workspace.RData")
+
+```
+
+# Load datasets (UMI count matrix)
+We load each dataset, filter out genes and merge them together before preprocessing
+
+```{r load}
+# Load the dataset
+
+###### SPINAL
+# Rosini1172 (MYC) -------------------------------------------------
+data.matrix <- Read10X(data.dir = "/marta_home/10X/expMATRIX/_ATRT/mouse/Rosini1172/outs/filtered_gene_bc_matrices/mm10/")
+
+dim(data.matrix)
+head(colnames(data.matrix))
+head(rownames(data.matrix))
+
+colnames(data.matrix) <- paste("ros1172_cell", 1:length(colnames(data.matrix)), sep = "")
+metadata <- data.frame(sample = rep("ros1172", ncol(data.matrix)), subgroup = rep("MYC", ncol(data.matrix)), localization = rep("spinal", ncol(data.matrix)), row.names = colnames(data.matrix))
+
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+ros1172 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
+ros1172
+
+write.table(ros1172@assays$RNA@counts, file = "/marta_home/GEO_COO/single_cell/Rosini1172_rawUMI.txt", sep = "\t", quote = F)
+
+# Rosini1177 (MYC) -------------------------------------------------
+data.matrix <- Read10X(data.dir = "/marta_home/10X/expMATRIX/_ATRT/mouse/Rosini1177/outs/filtered_gene_bc_matrices/mm10/")
+
+dim(data.matrix)
+head(colnames(data.matrix))
+head(rownames(data.matrix))
+
+colnames(data.matrix) <- paste("ros1177_cell", 1:length(colnames(data.matrix)), sep = "")
+metadata <- data.frame(sample = rep("ros1177", ncol(data.matrix)), subgroup = rep("MYC", ncol(data.matrix)), localization = rep("spinal", ncol(data.matrix)), row.names = colnames(data.matrix))
+
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+ros1177 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
+ros1177
+
+write.table(ros1177@assays$RNA@counts, file = "/marta_home/GEO_COO/single_cell/Rosini1177_rawUMI.txt", sep = "\t", quote = F)
+
+# Rosini1232 (MYC) -------------------------------------------------
+data.matrix <- Read10X(data.dir = "/marta_home/10X/expMATRIX/_ATRT/mouse/Rosini1232/outs/filtered_gene_bc_matrices/mm10/")
+
+dim(data.matrix)
+head(colnames(data.matrix))
+head(rownames(data.matrix))
+
+colnames(data.matrix) <- paste("ros1232_cell", 1:length(colnames(data.matrix)), sep = "")
+metadata <- data.frame(sample = rep("ros1232", ncol(data.matrix)), subgroup = rep("MYC", ncol(data.matrix)), localization = rep("spinal", ncol(data.matrix)), row.names = colnames(data.matrix))
+
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+ros1232 <- CreateSeuratObject(counts = data.matrix, min.cells = 3, min.features = 50, meta.data = metadata)
+ros1232
+
+
+write.table(ros1232@assays$RNA@counts, file = "/marta_home/GEO_COO/single_cell/Rosini1232_rawUMI.txt", sep = "\t", quote = F)
+
+```
+
+
+# Quality control and filtering 
+
+```{r vnifo}
+tumor.list <- list(ros1172 = ros1172, ros1177 = ros1177, ros1232 = ros1232)
+
+for (i in 1:length(tumor.list)) {
+    tumor.list[[i]][["percent.mt"]] <- PercentageFeatureSet(tumor.list[[i]], pattern = "^mt-")
+    plot1 <- FeatureScatter(tumor.list[[i]], feature1 = "nCount_RNA", feature2 = "percent.mt", cols = "black")
+    plot2 <- FeatureScatter(tumor.list[[i]], feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols = "black")
+    tiff(paste0("./preprocessing/", names(tumor.list[i]), ".tiff"), width = 500, height = 400)
+    print(CombinePlots(plots = list(plot1, plot2), legend = 'none'))
+    dev.off()
+}
+
+for (i in 1:length(tumor.list)) {
+  tumor.list[[i]] <- subset(tumor.list[[i]], subset = nFeature_RNA > 200 & percent.mt < 25)
+}
+
+
+
+```
+
+# Normalize the data with log normalization
+
+
+```{r nvffr}
+for (i in 1:length(tumor.list)) {
+  tumor.list[[i]] <- NormalizeData(tumor.list[[i]])
+  tumor.list[[i]] <- FindVariableFeatures(tumor.list[[i]], selection.method = "vst", 
+        nfeatures = 2000)
+}
+
+
+```
+
+# Integration 
+
+```{r vcmnvf}
+atrt.anchors <- FindIntegrationAnchors(object.list = tumor.list, dims = 1:30, k.filter = 150)
+
+features.intersection <- c(Reduce(intersect, lapply(atrt.anchors@object.list, rownames)))
+atrt.integrated <- IntegrateData(anchorset = atrt.anchors, features.to.integrate = features.intersection)
+
+
+```
+
+# Plot UMAP
+
+```{r cdi}
+
+atrt.integrated <- ScaleData(atrt.integrated)
+atrt.integrated <- RunPCA(atrt.integrated)
+atrt.integrated <- RunUMAP(atrt.integrated, dims = 1:30)
+plots <- DimPlot(atrt.integrated, group.by = c("sample", "subgroup"), combine = FALSE, pt.size = 1.5)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 3, 
+    byrow = TRUE, override.aes = list(size = 3))))
+tiff("atrt_MYCspinal_integrated_sample_sub.tiff", width = 1200, height = 800)
+print(CombinePlots(plots))
+dev.off()
+
+tiff("atrt_MYCspinal_integrated_sample.tiff", width = 1200, height = 500)
+DimPlot(atrt.integrated, split.by = "sample", group.by = "orig.ident", ncol = 5, pt.size = 0.8)
+dev.off()
+
+tiff("atrt_MYCspinal_integrated.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, group.by = "orig.ident", pt.size = 0.8)
+dev.off()
+
+
+tiff("atrt_MYCspinal_nUMI.tiff", width = 900, height = 700)
+FeaturePlot(object = atrt.integrated,  features = "nCount_RNA", pt.size = 0.8)
+dev.off()
+
+tiff("atrt_MYCspinal_nGene.tiff", width = 900, height = 700)
+FeaturePlot(object = atrt.integrated, features = "nFeature_RNA", pt.size = 0.8)
+dev.off()
+
+
+DefaultAssay(atrt.integrated) <- "integrated"
+
+atrt.integrated <- FindNeighbors(atrt.integrated, reduction = "pca", dims = 1:30)
+atrt.integrated <- FindClusters(atrt.integrated, resolution = 0.5)
+tiff("atrt_MYCspinal_clusters.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, pt.size = 0.8, group.by = "integrated_snn_res.0.5", label = T, label.size = 6)
+dev.off()
+
+
+# Create a table with number of cells by sample / cluster
+df <- data.frame(sample = as.character(atrt.integrated$orig.ident), 
+                 cluster = as.character(atrt.integrated$integrated_snn_res.0.5), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, sample) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~sample)
+WriteXLS(final, ExcelFileName = "cellNumber_sampleBYclusters.xlsx", row.names = F)
+  
+
+```
+
+
+
+# Plot markers
+
+
+```{r cndiofs}
+DefaultAssay(atrt.integrated) <- "RNA"
+
+
+tiff("atrt_MYCspinal_selected_markers.tiff", width = 1000, height = 900)
+FeaturePlot(atrt.integrated, c("Smarcb1", "Bmp4", "Mycn", "Epcam", "Cd44", "Cd68", "P2ry12", "Ms4a7", "Col1a2"))
+dev.off()
+
+VlnPlot(atrt.integrated, features = "Smarcb1")
+smarcbp.cells <- WhichCells(atrt.integrated, expression = Smarcb1 > 0.2)
+tiff("atrt_MYCspinal_Smarcb1_pos_cells.tiff", width = 900, height = 700)
+DimPlot(object = atrt.integrated, reduction.use = "tsne", pt.size = 0.8, cells.highlight = smarcbp.cells, cols.use = "gray", cols.highlight = "darkred", order = smarcbp.cells) + ggtitle("SMARCB1 positive cells")
+dev.off()
+
+tiff("MYC_spin_Dnd1.tiff", width = 900, height = 700)
+FeaturePlot(atrt.integrated, features = "Dnd1", pt.size = .8)
+dev.off()
+
+```
+
+
+# Gene expression programs
+
+```{r annot}
+# markers final
+list.mark <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/markers_ATRTfinal2.xlsx", col_names = T)
+list.mark <- list.mark[, -c(1,3,4)]
+
+genes.list <- list("Tumor_MYC_spinal" = list.mark$`Tumor MYC spinal`[!is.na(list.mark$`Tumor MYC spinal`)], 
+                   "Microglia-derived_TAMs" = list.mark$`Microglia-derived TAMs`[!is.na(list.mark$`Microglia-derived TAMs`)],
+                   "Blood-derived_TAMs" = list.mark$`Blood-derived TAMs`[!is.na(list.mark$`Blood-derived TAMs`)],
+                   "Dendritic_cells" = list.mark$`Dendritic cells`[!is.na(list.mark$`Dendritic cells`)],
+                   "Granulocytes_Mastcells" = list.mark$`Granulocytes/Mast cells`[!is.na(list.mark$`Granulocytes/Mast cells`)],
+                   "NKcells" = list.mark$`NK cells`[!is.na(list.mark$`NK cells`)],
+                   "Bcells" = list.mark$`B cells`[!is.na(list.mark$`B cells`)],
+                   "Tcells" = list.mark$`T cells`[!is.na(list.mark$`T cells`)],
+                   "Oligo" = list.mark$Oligo[!is.na(list.mark$Oligo)])
+
+
+atrt.integrated <- myaddModule_CellType(atrt.integrated, genes.list)
+
+# Create vector of colors
+my_color_palette <- RColorBrewer::brewer.pal(length(unique(atrt.integrated$CellType)), "Paired")
+my_color_palette[10] <- "slategrey"
+
+tiff("atrt_MYCspinal_annotation.tiff", width = 1000, height = 700)
+DimPlot(object = atrt.integrated , pt.size = 1, cols = my_color_palette, group.by = "CellType")  +  theme(legend.text=element_text(size=13))
+dev.off()
+
+###### Viktoria
+# Create a table with number of cells by subgroup / cell type
+df <- data.frame(subgroup = as.character(tumor.merge@meta.data$subgroup), 
+                 celltype = as.character(tumor.merge@meta.data$CellType), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(subgroup, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, celltype~subgroup)
+write.xlsx(final, file = "cellNumber_celltypeBYsubgroup.xlsx", row.names = F)
+  
+```
+
+
+## Find markers
+
+```{r cd}
+DefaultAssay(atrt.integrated) <- "RNA"
+
+for (i in levels(Idents(atrt.integrated))){
+  markers <- FindMarkers(atrt.integrated, ident.1 = i, test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("MYC_spinal_markers_", i, ".xlsx"), row.names = T)
+}
+
+
+```
+
+
+
+
+### Plot tumor markers from Moni's table
+
+```{r m}
+
+mark.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/markers/subgroup specific marker.xlsx", sheet = "Tabelle1", skip = 1, col_names = T)
+
+group.name <- colnames(mark.tab)
+
+for(col in group.name){
+  markers <- as.character(unlist(mark.tab[, col]))
+  markers <- markers[!is.na(markers)]
+  markers <- markers[markers %in% rownames(atrt.integrated)]
+  col <- gsub(" ", "_", col)
+  col <- gsub("/", "_", col)
+  for(mark in markers){
+  tiff(paste0("./tumor_markers/tabelle1/", col, "_", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue")))
+  dev.off()
+  }
+}
+
+
+
+mark.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/markers/subgroup specific marker.xlsx", sheet = "Tab2_short", col_names = T)
+
+group.name <- colnames(mark.tab)
+
+for(col in group.name){
+  markers <- as.character(unlist(mark.tab[, col]))
+  markers <- markers[!is.na(markers)]
+  markers <- markers[markers %in% rownames(atrt.integrated)]
+  col <- gsub(" ", "_", col)
+  col <- gsub("/", "_", col)
+  for(mark in markers){
+  tiff(paste0("./tumor_markers/tabelle2/", col, "_", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue")))
+  dev.off()
+  }
+}
+
+
+mark.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/markers/subgroup specific marker.xlsx", sheet = "Tabelle3", col_names = T)
+
+group.name <- colnames(mark.tab)
+
+for(col in group.name){
+  markers <- as.character(unlist(mark.tab[, col]))
+  markers <- markers[!is.na(markers)]
+  markers <- capitalize(tolower(markers)) 
+  markers <- markers[markers %in% rownames(atrt.integrated)]
+  col <- gsub(" ", "", col)
+  col <- gsub(",", "", col)
+  for(mark in markers){
+  tiff(paste0("./tumor_markers/tabelle3/", col, "_", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue")))
+  dev.off()
+  }
+}
+
+
+```
+
+## Plot Immune markers from annotation table
+
+```{r cndufig}
+
+list.mark <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/markers_ATRTfinal2.xlsx", col_names = T)
+list.mark <- list.mark[, -c(1:4)]
+group.name <- colnames(list.mark)
+
+for(col in group.name){
+  markers <- as.character(unlist(list.mark[, col]))
+  markers <- markers[!is.na(markers)]
+  markers <- capitalize(tolower(markers)) 
+  markers <- markers[markers %in% rownames(atrt.integrated)]
+  col <- gsub(" ", "", col)
+  col <- gsub("/", "_", col)
+  for(mark in markers){
+  tiff(paste0("./immune_markers/", col, "_", mark, ".tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+  dev.off()
+  }
+}
+
+
+```
+
+## Subcluster cluster 7
+
+```{r cmpgb}
+clust7 <- subset(atrt.integrated, subset = seurat_clusters == 7)
+DefaultAssay(clust7) <- "integrated"
+
+clust7 <- RunPCA(clust7)
+clust7 <- FindNeighbors(clust7, reduction = "pca", dims = 1:20)
+clust7 <- FindClusters(clust7, resolution = 0.2)
+tiff("atrt_MYCspinal_clust7_subclustered.tiff", width = 900, height = 700)
+DimPlot(clust7, pt.size = 0.8, group.by = "integrated_snn_res.0.2", label = T, label.size = 6)
+dev.off()
+
+
+cells.tum.clust7 <- WhichCells(clust7, idents = 2)
+
+# Rename identities in full dataset
+Idents(atrt.integrated, cells = cells.tum.clust7) <- 19
+
+atrt.integrated$new_clustering <- factor(Idents(atrt.integrated), levels = 0:19)
+
+tiff("atrt_MYCspinal_NEWclusters.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, pt.size = 0.8, group.by = "new_clustering", label = T, label.size = 6)
+dev.off()
+tiff("atrt_MYCspinal_NEWclusters_noNum.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, pt.size = 0.8, group.by = "new_clustering", label = F, label.size = 6)
+dev.off()
+
+## Recompute DE lists for new clusters
+DefaultAssay(atrt.integrated) <- "RNA"
+
+# clust 7
+markers <- FindMarkers(atrt.integrated, ident.1 = 7, test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = paste0("MYC_spinal_markers_", 7, ".xlsx"), row.names = T)
+
+# clust 19
+markers <- FindMarkers(atrt.integrated, ident.1 = 19, test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = paste0("MYC_spinal_markers_", 19, ".xlsx"), row.names = T)
+```
+# Create a table with number of cells by cluster / cell type
+
+```{r vnfio}
+df <- data.frame(cluster = as.character(atrt.integrated$new_clustering), 
+                 celltype = as.character(atrt.integrated$CellType), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, celltype~cluster)
+WriteXLS(final, ExcelFileName = "MYC_spinal_cellNumber_celltypeBYcluster.xlsx", row.names = F)
+  
+``` 
+
+## Save tumor clusters for COO
+
+```{r dmisobf}
+tum.cells <- colnames(atrt.integrated)[atrt.integrated$new_clustering %in% c(1,16,19,14)]
+tum.clusts <- atrt.integrated[, tum.cells]
+dim(GetAssay(tum.clusts, "RNA"))
+
+saveRDS(tum.clusts, file = "myc_spinal_tumor_cells.rds")
+
+
+```
+## DE tumor clusters vs NON-tumor clusters
+
+```{r cndiso}
+DefaultAssay(atrt.integrated) <- "RNA"
+markers <- FindMarkers(atrt.integrated, ident.1 =c(1,16,19,14), test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = "DE_MYC_spin_tumorVSothers.xlsx", row.names = T)
+
+```
+
+## Save entire object for plotting markers
+
+```{r dmisobf}
+
+saveRDS(atrt.integrated, file = "myc_spinal_seuobj.rds")
+
+
+```
+
+## Plot PGC markers
+
+```{r bkgopsh}
+
+pgc.mark <- c("Pou5f1", "Tfap2c", "Prdm1", "Sox17")
+
+for(mark in pgc.mark){
+  tiff(paste0("./PGCmarkers/", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+  dev.off()
+}
+
+
+```
+
+# Trying markers for perineural invasion by PNS cells
+
+```{r vmfidg}
+##Gene genes associated to angiogenesis and axonogenesis
+ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
+
+# Get mouse genes associated to angiogenesis and child terms
+angio.genes.go <- getBM(attributes=c('mgi_symbol'),
+                        filters = 'go', values = 'GO:0001525', mart = ensembl)
+
+
+# this list is too big to be plotted: trying with msigDBgenesets
+angio.geneset <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/angiogenesis_geneset.txt", skip = 2)
+angio.geneset <- capitalize(tolower(as.character(angio.geneset$V1)))
+
+axono.geneset <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/axonogenesis_geneset.txt", skip = 2)
+axono.geneset <- capitalize(tolower(as.character(axono.geneset$V1)))
+
+angio.geneset <- angio.geneset[angio.geneset %in% rownames(atrt.integrated)]
+axono.geneset <- axono.geneset[axono.geneset %in% rownames(atrt.integrated)]
+
+for(mark in angio.geneset){
+  tiff(paste0("./angiogenesis_markers/", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+  dev.off()
+}
+
+for(mark in axono.geneset){
+  tiff(paste0("./axonogenesis_markers/", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+  dev.off()
+}
+
+
+FeaturePlot(atrt.integrated, features = c("Cd3d", "Cd8a", "Fcgr3a"), pt.size = 1, cols = c("gray", "blue"), order = T)
+
+
+# gonadal endothelial markers
+gon.endo <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/gonadal_endothelial_markers.txt", sep = ",")
+gon.endo <- trimws(as.character(unlist(gon.endo[1,])))
+
+gon.endo <- gon.endo[gon.endo != "NA"]
+gon.endo <- capitalize(tolower(gon.endo))
+gon.endo <- gon.endo[gon.endo %in% rownames(atrt.integrated)]
+
+mat <- GetAssayData(atrt.integrated, slot = "data")
+dim(mat)
+mat <- mat[gon.endo, ]
+dim(mat)
+
+atrt.integrated$mean_gonadal_endoth <- colMeans(as.matrix(mat))
+
+tiff("MYC_EC_gonadal_markers_feat.tiff", width = 900, height = 700)
+FeaturePlot(atrt.integrated, features = "mean_gonadal_endoth", pt.size = 1, cols = c("gray", "blue"), order = T)
+dev.off()
+
+gon.endo.100 <- sample(gon.endo, 100, replace = F)
+
+for(mark in gon.endo.100){
+  tiff(paste0("./gonadal_endothelial_markers/", mark, "_feat.tiff"), width = 900, height = 700)
+  print(FeaturePlot(atrt.integrated, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+  dev.off()
+}
+
+
+```  
+
+
+
+                   
+
+## DE analysis only tumors
+
+```{r cnifoga}
+DefaultAssay(tum.clusts) <- "RNA"
+Idents(tum.clusts) <- tum.clusts$new_clustering
+
+for (i in levels(Idents(tum.clusts))){
+  markers <- FindMarkers(tum.clusts, ident.1 = i, test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("MYC_spinal_markers_TUMonly_", i, ".xlsx"), row.names = T)
+}
+
+
+```
+
+
+# Moni heatmap tumor cluster
+
+```{r vobpdbh}
+gene.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/markers_heatmap_MYCspinal.xlsx")
+
+gene.categ <- colnames(gene.tab)
+
+genes.all <- c()
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(gene.tab[, cat]))))
+  genes <- genes[genes %in% rownames(tum.clusts)]
+  genes.all <- c(genes.all, genes)
+}
+
+# check for duplicated genes and delete them
+dup.genes <- genes.all[duplicated(genes.all)]
+
+genes.all.nodup <- c()
+gaps <- c()
+
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(gene.tab[, cat]))))
+  genes <- genes[genes %in% rownames(tum.clusts)]
+  genes <- genes[!(genes %in% dup.genes)]
+  genes.all.nodup <- c(genes.all.nodup, genes)
+  gaps <- c(gaps, length(genes))
+}
+sum(duplicated(genes.all.nodup))
+WriteXLS(x = as.data.frame(genes.all.nodup), ExcelFileName = "MYC_spin_heat_genesNOdup.xlsx")
+
+tum_clust_mat <- GetAssayData(tum.clusts, slot = "data", assay = "RNA")
+dim(tum_clust_mat)
+tum_clust_mat <- tum_clust_mat[genes.all.nodup,]
+dim(tum_clust_mat)
+
+# order cells by cluster
+clusts <- sort(tum.clusts$new_clustering)
+head(clusts)
+tum_clust_mat <- tum_clust_mat[, names(clusts)]
+
+annotation_col <- data.frame(cluster = clusts, row.names = names(clusts))
+annotation_row <- data.frame(gene_category = rep(gene.categ, times = gaps), row.names = genes.all.nodup)
+
+pheatmap(tum_clust_mat, color= colorRampPalette(brewer.pal(n = 11, name =
+  "Blues"))(5), scale = "none", cluster_rows = F, cluster_cols = F,  annotation_row = annotation_row, annotation_col = annotation_col,annotation_names_row = F, gaps_row = cumsum(gaps), show_rownames = F, show_colnames = F, filename = "MYC_spinal_tumHeatmap.tiff", width = 10, height = 6)
+
+## aggregate cluster by computing average
+
+mat <- as.data.frame(t(as.matrix(tum_clust_mat)))
+
+mat$cluster <- clusts
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(cluster= mean.mat$cluster, row.names = rownames(mean.mat))
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, scale = "row", cluster_rows = F, cluster_cols = F,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_names_row = F, gaps_row = cumsum(gaps), show_rownames = F, show_colnames = F, filename = "MYC_spinal_tumHeatmap_mean.tiff", width = 10, height = 6)
+
+```
+
+## Plot predictor genes
+
+```{r cnduig}
+plot_predictors <- function(pred.df, celltype, data){
+  pred.genes.pos <- as.character(unlist(pred.df[pred.df$coefficient >0, "predictors"]))
+  pred.genes.neg <- as.character(unlist(pred.df[pred.df$coefficient <0, "predictors"]))
+  
+  pred.genes.pos <- pred.genes.pos[pred.genes.pos %in% rownames(data)]
+  pred.genes.neg <- pred.genes.neg[pred.genes.neg %in% rownames(data)]
+  
+  for(mark in pred.genes.pos){
+    tiff(paste0("./predictors/", celltype, "/positive/", mark, "_feat.tiff"), width = 900, height = 700)
+    print(FeaturePlot(data, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+    dev.off()
+  }
+  
+  for(mark in pred.genes.neg){
+    tiff(paste0("./predictors/", celltype,"/negative/", mark, "_feat.tiff"), width = 900, height = 700)
+    print(FeaturePlot(data, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+    dev.off()
+  }
+}
+
+## PGCs
+pgc.pred.genes <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/PGC_predictors.xlsx")
+
+plot_predictors(pgc.pred.genes, "PGC", atrt.integrated)
+
+## Midhindbrain
+midhind.pred.genes <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/MidHindbrain_predictors.xlsx")
+plot_predictors(midhind.pred.genes, "midhind", atrt.integrated)
+```
+
+
+#### Cell cycle scoring
+
+```{r fneiog}
+cell.cycle.genes <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/cell_cycle_markers_Tirosh.xlsx", skip = 1)
+s.genes <- cell.cycle.genes$`G1/S`
+g2m.genes <- cell.cycle.genes$`G2/M`
+
+s.genes <- s.genes[!is.na(s.genes)]
+g2m.genes <- g2m.genes[!is.na(g2m.genes)]
+
+
+s.genes <- capitalize(tolower(s.genes))
+g2m.genes <- capitalize(tolower(g2m.genes))
+
+s.genes <- s.genes[s.genes %in% rownames(atrt.integrated)]
+g2m.genes <- g2m.genes[g2m.genes %in% rownames(atrt.integrated)]
+
+atrt.integrated <- CellCycleScoring(atrt.integrated, s.features = s.genes, g2m.features = g2m.genes)
+
+tiff("atrt_MYCspinal_CCphase.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, pt.size = 0.8, group.by = "Phase", cols = c("#1f77b4", "#ff7f0e", "#279e68"))
+dev.off()
+
+```
+## Subcluster CC clusters and DE only tumors
+
+
+```{r cnso}
+unique(tum.clusts$new_clustering)
+clust1 <- subset(tum.clusts, subset = new_clustering == 1)
+DefaultAssay(clust1) <- "integrated"
+
+clust1 <- RunPCA(clust1)
+clust1 <- FindNeighbors(clust1, reduction = "pca", dims = 1:20)
+clust1 <- FindClusters(clust1, resolution = 0.5)
+tiff("atrt_MYCspinal_clust1_subclustered.tiff", width = 1000, height = 500)
+DimPlot(clust1, pt.size = 1.2, group.by = c("integrated_snn_res.0.5", "Phase"), label = T, label.size = 6)
+dev.off()
+
+
+cells.tum.clust1.1 <- WhichCells(clust1, idents = 1)
+cells.tum.clust1_G2M.S <- colnames(clust1)[clust1$Phase %in% c("G2M", "S")]
+
+cells2rename <- intersect(cells.tum.clust1.1, cells.tum.clust1_G2M.S)
+
+# Rename identities in tumor dataset
+Idents(tum.clusts, cells = cells2rename) <- "1_CC"
+
+tum.clusts$CC_clusts <- factor(Idents(tum.clusts))
+
+tiff("atrt_MYCspinal_CC_subclustered_phase.tiff", width = 1000, height = 500)
+DimPlot(tum.clusts, pt.size = 0.8, group.by = c("CC_clusts", "Phase"), label = T, label.size = 6)
+dev.off()
+
+tiff("atrt_MYCspinal_CC_subclustered.tiff", width = 1000, height = 500)
+DimPlot(tum.clusts, pt.size = 0.8, group.by = c("CC_clusts"))
+dev.off()
+
+## compute DE lists for CC cluster vs all others
+DefaultAssay(tum.clusts) <- "RNA"
+
+markers <- FindMarkers(tum.clusts, ident.1 = "1_CC", test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = "DE_MYCspinTUM_CCclust1vsallTum.xlsx", row.names = T)
+
+# Rename idents in full ds
+cc_cells <- colnames(tum.clusts)[tum.clusts$CC_clusts == "1_CC"]
+
+full_CC_clusts <- atrt.integrated$new_clustering
+full_CC_clusts[cc_cells] <- NA
+
+atrt.integrated$CC_clusts <- full_CC_clusts
+
+tiff("atrt_MYCspinal_CC_clusters_all.tiff", width = 900, height = 700)
+DimPlot(atrt.integrated, pt.size = 0.8, group.by = "CC_clusts", label = F)
+dev.off()
+```
+
+
+# Moni heatmap tumor cluster CC clust CC functions
+
+```{r vobpdbh}
+gene.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/genes_CC_MYC_heatmap_updated.xlsx", sheet = "SPIN")
+gene.categ <- colnames(gene.tab)
+
+genes.all <- c()
+gaps <- c()
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(gene.tab[, cat]))))
+  genes <- genes[genes %in% rownames(tum.clusts)]
+  genes.all <- c(genes.all, genes)
+  gaps <- c(gaps, length(genes))
+}
+
+tum_clust_mat <- GetAssayData(tum.clusts, slot = "data", assay = "RNA")
+dim(tum_clust_mat)
+tum_clust_mat <- tum_clust_mat[genes.all,]
+dim(tum_clust_mat)
+
+# order cells by cluster
+clusts <- tum.clusts$CC_clusts[order(match(tum.clusts$CC_clusts, c("1", "14", "16", "19", "1_CC")))]
+clusts <- factor(clusts, levels = c("1", "14", "16", "19", "1_CC"))
+tum_clust_mat <- tum_clust_mat[, names(clusts)]
+
+annotation_col <- data.frame(cluster = clusts, row.names = names(clusts))
+annotation_row <- data.frame(gene_category = rep(gene.categ, times = gaps), row.names = genes.all)
+
+pheatmap(tum_clust_mat, scale = "none", color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), cluster_rows = F, cluster_cols = F,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_names_row = F, gaps_row = cumsum(gaps), show_rownames = T, show_colnames = F, filename = "MYC_spin_tumHeatmap_CCall.tiff", width = 10, height = 6)
+
+## aggregate cluster by computing average
+
+mat <- as.data.frame(t(as.matrix(tum_clust_mat)))
+
+mat$cluster <- clusts
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(cluster= mean.mat$cluster, row.names = rownames(mean.mat))
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, scale = "none", color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), cluster_rows = F, cluster_cols = F,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_names_row = F, gaps_row = cumsum(gaps), show_rownames = T, show_colnames = F, filename = "MYC_spin_tumHeatmap_CCall_mean.tiff", width = 10, height = 6)
+
+
+
+
+
+##---- plotting each column separately
+gene.tab <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/genes_CC_MYC_heatmap.xlsx")
+tum_clust_mat <- GetAssayData(tum.clusts, slot = "data", assay = "RNA")
+dim(tum_clust_mat)
+# order cells by cluster
+clusts <- sort(tum.clusts$CC_clusts)
+head(clusts)
+tum_clust_mat <- tum_clust_mat[, names(clusts)]
+annotation_col <- data.frame(cluster = clusts, row.names = names(clusts))
+
+gene.categ <- colnames(gene.tab)
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(gene.tab[, cat]))))
+  genes <- genes[genes %in% rownames(tum.clusts)]
+  
+  tum_clust_sub <- tum_clust_mat[genes,]
+  
+  
+
+
+  pheatmap(tum_clust_sub, color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), scale = "none", cluster_rows = F, cluster_cols = F,  annotation_col = annotation_col, show_rownames = T, show_colnames = F, filename = paste0("MYC_spin_tumHeatmap_CC_", cat, ".tiff"), width = 10, height = 6)
+}
+
+
+```
+
+# Dotplot epi markers tum clusters
+
+
+```{r cndsif}
+epi.mark <- c("Ezh2", "Dnmt3a", "Dnmt1", "Tet1", "Kdm6a")
+
+tiff("MYC_spinal_dotplot_EPIgenes_tumors4Fig.tiff", width = 300, height = 400)
+DotPlot(tum.clusts, assay = "RNA", features = epi.mark, group.by = "CC_clusts", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + scale_x_discrete(limits = levels(factor(epi.mark)))
+dev.off()
+```
+
+
+# Create pseudobulk for cibersort
+
+```{r riog}
+table(tum.clusts$sample)
+
+tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
+max(tum_counts)
+
+colnames(tum_counts) <- tum.clusts$sample
+rownames(tum_counts)[1:5]
+
+mat <- as.data.frame(t(as.matrix(tum_counts)))
+
+mat$sample <- colnames(tum_counts)
+
+sum.mat <- aggregate(. ~ sample, mat, sum)
+
+rownames(sum.mat) <- sum.mat$sample
+
+sum.mat <- sum.mat[,-1]
+sum.mat <- t(as.matrix(sum.mat))
+
+dim(sum.mat)
+rownames(sum.mat)
+tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
+
+tum_mat[1:5,]
+
+write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/MYC_spin_bulk.txt",
+            quote = FALSE, sep = "\t", row.names = F, col.names = T)
+
+### Clusterwise
+table(tum.clusts$new_clustering)
+
+tum_counts <- GetAssayData(tum.clusts, slot = "counts", assay = "RNA")
+max(tum_counts)
+
+colnames(tum_counts) <- tum.clusts$new_clustering
+rownames(tum_counts)[1:5]
+
+mat <- as.data.frame(t(as.matrix(tum_counts)))
+
+mat$clust <- colnames(tum_counts)
+
+sum.mat <- aggregate(. ~ clust, mat, sum)
+
+rownames(sum.mat) <- sum.mat$clust
+
+sum.mat <- sum.mat[,-1]
+sum.mat <- t(as.matrix(sum.mat))
+
+dim(sum.mat)
+rownames(sum.mat)
+tum_mat <- cbind("gene_symbol" = rownames(sum.mat), sum.mat)
+
+tum_mat[1:5,]
+
+write.table(tum_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/MYC_spin_bulk_clust.txt",
+            quote = FALSE, sep = "\t", row.names = F, col.names = T)
+
+```
+
+# Dotplot stromal markers tumor vs tme
+
+
+```{r cndsif}
+
+stromal.mark <- read_excel("../marker list stromal markers.xlsx")
+stromal.mark <- unlist(stromal.mark)
+stromal.mark <- capitalize(tolower(stromal.mark))
+stromal.mark <- stromal.mark[stromal.mark %in% rownames(atrt.integrated)]
+
+# Add Smarcb1 for reviewer
+stromal.mark <- c("Smarcb1", stromal.mark)
+
+pheno <- as.character(atrt.integrated$seurat_clusters)
+names(pheno) <- colnames(atrt.integrated)
+tum.cells <- colnames(atrt.integrated)[atrt.integrated$new_clustering %in% c(1,16,19,14)]
+pheno[] <- "TME"
+pheno[tum.cells] <- "TUM"
+table(pheno)
+atrt.integrated$pheno <- as.factor(pheno)
+
+pdf("MYC_spin_dotplot_stromal_TUMvsTME.pdf")
+DotPlot(atrt.integrated, features = stromal.mark, group.by = "pheno", dot.scale = 10) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15)) 
+dev.off()
+```
+
+## Save preprocessed data 
+```{r}
+saveRDS(atrt.integrated, file = "/marta_home/GEO_COO/single_cell/MYC_spinal_integrated_seurat_obj.rds")
+```

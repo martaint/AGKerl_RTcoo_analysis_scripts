@@ -1,0 +1,143 @@
+---
+title: "COO-WGBS analysis"
+author: "Marta Interlandi"
+date: "7/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(pheatmap)
+library(data.table)
+library(GenomicRanges)
+library(dplyr)
+library(RColorBrewer)
+setwd("/marta_home/WGBS/COO_RT_PGCs/R")
+
+load("/marta_home/WGBS/COO_RT_PGCs/R/workspace.RData")
+```
+
+# We have three DMRs calls
+1. early stages: PGCs vs soma at 7w
+2. middle stages: PGCs vs soma at 10-11w
+3. late stages: PGCs vs soma at 17-19w
+
+
+```{r ikfehfw}
+# load annotated DMRs from comparison 1
+
+res.dir <- "/marta_home/WGBS/COO_RT_PGCs/wg-blimp-results/"
+
+dmr1 <- fread(paste0(res.dir, "dmr_1/annotated-dmrs.csv"))
+dmr2 <- fread(paste0(res.dir, "dmr_2/annotated-dmrs.csv"))
+dmr3 <- fread(paste0(res.dir, "dmr_3/annotated-dmrs.csv"))
+colnames(dmr1)
+
+dmr1[1:10,]
+## Filtering dmrs with q <= 0.05 and absolute mean difference >= 0.6
+dmr1 <- dmr1 %>% filter((qValue <= 0.05 | is.na(qValue)) & abs(diff) >= 0.6)
+dmr2 <- dmr2 %>% filter((qValue <= 0.05 | is.na(qValue)) & abs(diff) >= 0.6)
+dmr3 <- dmr3 %>% filter((qValue <= 0.05 | is.na(qValue)) & abs(diff) >= 0.6)
+
+# filtering X and Y chromosomes
+dmr1 <- dmr1 %>% filter(chr %in% paste0("chr", 1:22))
+dmr2 <- dmr2 %>% filter(chr %in% paste0("chr", 1:22))
+dmr3 <- dmr3 %>% filter(chr %in% paste0("chr", 1:22))
+
+# randomly sampling 2,000 dmrs per condition
+samp1 <- sample(1:nrow(dmr1), 2000, replace = F)
+samp2 <- sample(1:nrow(dmr2), 2000, replace = F)
+samp3 <- sample(1:nrow(dmr3), 2000, replace = F)
+
+dmr1_samp <- dmr1[samp1,]
+dmr2_samp <- dmr2[samp2,]
+dmr3_samp <- dmr3[samp3,]
+
+dmr1_ranges <- GRanges(seqnames = dmr1_samp$chr, ranges = IRanges(dmr1_samp$start, dmr1_samp$end))
+dmr2_ranges <- GRanges(seqnames = dmr2_samp$chr, ranges = IRanges(dmr2_samp$start, dmr2_samp$end))
+dmr3_ranges <- GRanges(seqnames = dmr3_samp$chr, ranges = IRanges(dmr3_samp$start, dmr3_samp$end))
+
+dmr_all_ranges <- append(dmr1_ranges, dmr2_ranges)
+dmr_all_ranges <- append(dmr_all_ranges, dmr3_ranges)
+dmr_unique <- unique(dmr_all_ranges)
+
+
+
+
+methylationFolder <- paste0(res.dir, "methylation/")
+methylationValueFiles <- list.files(methylationFolder, full.names = TRUE)
+methylationValues <- lapply(methylationValueFiles, fread, skip = 1)
+names(methylationValues) <- tools::file_path_sans_ext(basename(methylationValueFiles))
+
+computeAverageMethylation <- function (methylationValues, minCoverage, dmrRanges) {
+  
+  averageMethylations <- sapply(methylationValues, function (sampleValues) {
+  
+  sufficientCoverageValues <- sampleValues[V5 + V6 >= minCoverage]
+  
+  sampleRanges <- GRanges(seqnames = sufficientCoverageValues$V1, ranges = IRanges(start = sufficientCoverageValues$V2, end = sufficientCoverageValues$V3))
+  
+  averageMethylations <- sapply(seq_along(dmrRanges), function (dmrRangeIndex) {
+    
+    dmrRange <- dmrRanges[dmrRangeIndex]
+    
+    overlap <- findOverlaps(sampleRanges, dmrRange)
+  
+    hitMethylation <- queryHits(overlap)
+
+    return(mean(sufficientCoverageValues[hitMethylation]$V5 / (sufficientCoverageValues[hitMethylation]$V5 + sufficientCoverageValues[hitMethylation]$V6)))
+
+  })
+  
+  })
+    
+  return(averageMethylations)
+}
+
+```
+
+
+```{r min-5}
+min5Methylations <- data.table(computeAverageMethylation(methylationValues, 5, dmr_unique))
+saveRDS(min5Methylations, "/marta_home/WGBS/COO_RT_PGCs/R/mat_min5Meth.rds")
+
+annotationCol <- data.frame(pheno = sapply(strsplit(colnames(min5Methylations), "_"), function(x) x[4]), row.names = colnames(min5Methylations))
+annotationCol$pheno[annotationCol$pheno == "pcg"] <- "pgc"
+
+pheatmap(min5Methylations, scale = "none", color = colorRampPalette(brewer.pal(n = 7, name =
+  "YlGnBu"))(100), cluster_rows = T, cluster_cols = T, clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean", clustering_method = "ward.D2", show_colnames = T, show_rownames = F, annotation_col = annotationCol, filename = "WGBS_heatmap_6000DMRs.tiff", width = 12, height = 6)
+
+```
+
+
+### Genome-wide DNA methylation levels
+
+```{r dneuif}
+computeGlobalAverageMethylation <- function (methylationValues, minCoverage) {
+  
+  averageMethylations <- sapply(methylationValues, function (sampleValues) {
+  
+  sufficientCoverageValues <- sampleValues[V5 + V6 >= minCoverage]
+  
+  return(mean(sufficientCoverageValues$V5 / (sufficientCoverageValues$V5 + sufficientCoverageValues$V6)))
+
+  })
+    
+  return(averageMethylations)
+}
+
+min5Methylations.global <- data.table(computeGlobalAverageMethylation(methylationValues, 5))
+saveRDS(min5Methylations.global, "/marta_home/WGBS/COO_RT_PGCs/R/mat_min5MethGlobal.rds")
+
+min5Methylations.global$sample <- names(methylationValues)
+ggplot(min5Methylations.global, aes(x=sample, y=V1)) +
+  geom_bar(stat= "identity") + coord_flip()
+
+
+
+```

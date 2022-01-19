@@ -1,0 +1,458 @@
+---
+title: "DAC-treated NODSCID for COO project"
+author: "Marta Interlandi"
+date: "9/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+library(pheatmap)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/nodscid/")
+source("/marta_home/scRNAseq_Ranalysis/code/mouse2human_convert_symbols.R")
+source("/marta_home/scRNAseq_Ranalysis/Seurat_v3/code/myaddModule_CellType.R")
+source("/marta_home/scRNAseq_Ranalysis/Seurat_v3/code/createNodScidMat.R")
+
+load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/nodscid/workspace.RData")
+```
+
+# Convert Seurat to singlecellexperiment object for iSEE
+
+
+```{r vnuifg}
+
+sce <- as.SingleCellExperiment(samples.integrated)
+saveRDS(sce, file = "COO_nodscid_sce.rds")
+
+```
+
+
+# Load datasets (UMI count matrix)
+We load each dataset, filter out genes 
+
+
+
+```{r load}
+# Load the dataset (load raw unfiltered matrix from the separate alignments)
+
+############ Nodscid 1074 - control (untreated)
+nod1074.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/NODSCID_old/Nodscid1074_human/outs/raw_gene_bc_matrices/GRCh38/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/NODSCID_old/Nodscid1074_mouse/outs/raw_gene_bc_matrices/mm10/",
+                                  sample_name = "nod1074")
+
+dim(nod1074.merge)
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+nod1074 <- CreateSeuratObject(counts = nod1074.merge, min.cells = 0, min.features = 0, project = "nod1074")
+
+
+
+
+#write.table(nod1074.merge, file = "Nodscid1074_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+
+############ Nodscid 1216 - control (untreated)
+nod1216.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/Nodscid1216_hum/outs/raw_gene_bc_matrices/GRCh38/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/Nodscid1216_mou/outs/raw_gene_bc_matrices/mm10/",
+                                  sample_name = "nod1216")
+dim(nod1216.merge)
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+nod1216 <- CreateSeuratObject(counts = nod1216.merge, min.cells = 0, min.features = 0, project = "nod1216")
+
+#write.table(nod1216.merge, file = "Nodscid1216_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+
+
+############ Nodscid 1214 - control (untreated)
+nod1214.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/Nodscid1214_hum/outs/raw_gene_bc_matrices/GRCh38/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/Nodscid1214_mou/outs/raw_gene_bc_matrices/mm10/",
+                                  sample_name = "nod1214")
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+nod1214 <- CreateSeuratObject(counts = nod1214.merge, min.cells = 0, min.features = 0, project = "nod1214")
+
+nod1214
+#write.table(nod1214.merge, file = "Nodscid1214_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+
+############ Nodscid 1601 - OT
+nod1601.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/Nodscid1601_hum/outs/raw_feature_bc_matrix/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/Nodscid1601_mou/outs/raw_feature_bc_matrix/",
+                                  sample_name = "nod1601")
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+nod1601 <- CreateSeuratObject(counts = nod1601.merge, min.cells = 0, min.features = 0, project = "nod1601")
+
+nod1601
+#write.table(nod1601.merge, file = "Nodscid1601_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+
+
+############ Nodscid 1602 - OT
+nod1602.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/Nodscid1602_hum/outs/raw_feature_bc_matrix/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/Nodscid1602_mou/outs/raw_feature_bc_matrix/",
+                                  sample_name = "nod1602")
+
+# Create a Seurat object
+nod1602 <- CreateSeuratObject(counts = nod1602.merge, min.cells = 0, min.features = 0, project = "nod1602")
+
+nod1602
+#write.table(nod1602.merge, file = "Nodscid1602_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+
+
+############ Nodscid 1603 - OT
+nod1603.merge <- createNodScidMat(hum_dir = "/marta_home/10X/expMATRIX/Nodscid1603_hum/outs/raw_feature_bc_matrix/",
+                                  mou_dir = "/marta_home/10X/expMATRIX/Nodscid1603_mou/outs/raw_feature_bc_matrix/",
+                                  sample_name = "nod1603")
+
+# Create a Seurat object
+# Keep all cells with at least 100 detected genes
+nod1603 <- CreateSeuratObject(counts = nod1603.merge, min.cells = 0, min.features = 0, project = "nod1603")
+
+nod1603
+#write.table(nod1603.merge, file = "Nodscid1603_rawUMI.txt", sep = "\t", row.names = T, col.names = T)
+```
+
+
+
+# Quality control and filtering 
+
+```{r vnifo}
+sample.list <- list(nod1074 = nod1074, nod1214 = nod1214, nod1216 = nod1216, nod1601 = nod1601, nod1602 = nod1602, nod1603 = nod1603)
+
+for (i in 1:length(sample.list)) {
+    sample.list[[i]][["percent.mt"]] <- PercentageFeatureSet(sample.list[[i]], pattern = "^GRCh38-MT-|^mm10-mt-")
+    plot1 <- FeatureScatter(sample.list[[i]], feature1 = "nCount_RNA", feature2 = "percent.mt", group.by = "nFeature_RNA")
+    plot2 <- FeatureScatter(sample.list[[i]], feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "percent.mt")
+    tiff(paste0("./preprocessing/", names(sample.list[i]), ".tiff"), width = 500, height = 400)
+    print(CombinePlots(plots = list(plot1, plot2)))
+    dev.off()
+}
+
+for (i in 1:length(sample.list)) {
+  species.orig <- colnames(sample.list[[i]])
+  ind.hybrid <- grep("hybrid", species.orig)
+  ind.hum <- grep("hum", species.orig)
+  ind.mou <- grep("mou", species.orig)
+  
+  species.orig[ind.hybrid] <- "hybrid"
+  species.orig[ind.hum] <- "human"
+  species.orig[ind.mou] <- "mouse"
+  sample.list[[i]]$species.orig <- species.orig
+}
+
+for (i in 1:length(sample.list)) {
+  tiff(paste0("./preprocessing/nFeatBYspecies_", names(sample.list[i]), ".tiff"), width = 500, height = 400)
+  print(RidgePlot(sample.list[[i]], features = "nFeature_RNA", group.by = "species.orig"))
+  dev.off()
+}
+
+
+
+sample.list[[1]] <- subset(sample.list[[1]], subset = percent.mt < 60 & nFeature_RNA > 200)
+sample.list[[2]] <- subset(sample.list[[2]], subset = percent.mt < 60 & nFeature_RNA > 200)
+sample.list[[3]] <- subset(sample.list[[3]], subset = percent.mt < 60 & nFeature_RNA > 200)
+sample.list[[4]] <- subset(sample.list[[4]], subset = percent.mt < 60 & nFeature_RNA > 200)
+sample.list[[5]] <- subset(sample.list[[5]], subset = percent.mt < 60 & nFeature_RNA > 200)
+sample.list[[6]] <- subset(sample.list[[6]], subset = percent.mt < 60 & nFeature_RNA > 200)
+
+
+
+```
+
+# Normalize the data with log normalization
+
+
+```{r nvffr}
+for (i in 1:length(sample.list)) {
+  sample.list[[i]] <- NormalizeData(sample.list[[i]])
+  sample.list[[i]] <- FindVariableFeatures(sample.list[[i]], selection.method = "vst", 
+        nfeatures = 2000)
+}
+
+
+```
+
+# Integration 
+
+```{r vcmnvf}
+anchors <- FindIntegrationAnchors(object.list = sample.list, dims = 1:30, k.filter = 50)
+
+features.intersection <- c(Reduce(intersect, lapply(anchors@object.list, rownames)))
+samples.integrated <- IntegrateData(anchorset = anchors, features.to.integrate = features.intersection)
+
+
+```
+
+# Plot UMAP
+
+```{r cdi}
+
+samples.integrated <- ScaleData(samples.integrated)
+samples.integrated <- RunPCA(samples.integrated)
+samples.integrated <- RunUMAP(samples.integrated, dims = 1:30)
+
+
+
+tiff("UMAP_integrated_sample.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, group.by = "orig.ident", pt.size = 0.8)
+dev.off()
+
+tiff("UMAP_integrated_sample_split.tiff", width = 1100, height = 800)
+DimPlot(samples.integrated, split.by = "orig.ident", pt.size = 0.8, ncol = 3)
+dev.off()
+
+tiff("UMAP_integrated_species.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, group.by = "species.orig", pt.size = 0.8)
+dev.off()
+
+
+tiff("UMAP_nGene.tiff", width = 900, height = 700)
+FeaturePlot(object = samples.integrated, features = "nFeature_RNA", pt.size = 0.8)
+dev.off()
+
+tiff("UMAP_percent_mito.tiff", width = 900, height = 700)
+FeaturePlot(object = samples.integrated, features = "percent.mt", pt.size = 0.8)
+dev.off()
+
+samples.integrated$OT.only <- ifelse(samples.integrated$orig.ident %in% c("nod1601", "nod1602", "nod1603"), "OT", NA)
+samples.integrated$ctrl.only <- ifelse(!(samples.integrated$orig.ident %in% c("nod1601", "nod1602", "nod1603")), "ctrl", NA)
+
+tiff("UMAP_integrated_OT.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, group.by = "OT.only", pt.size = 0.8)
+dev.off()
+tiff("UMAP_integrated_ctrl.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, group.by = "ctrl.only", pt.size = 0.8, cols = "royalblue")
+dev.off()
+
+DefaultAssay(samples.integrated) <- "integrated"
+
+samples.integrated <- FindNeighbors(samples.integrated, reduction = "pca", dims = 1:30)
+samples.integrated <- FindClusters(samples.integrated, resolution = 0.5)
+tiff("UMAP_clusters.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, pt.size = 0.8, group.by = "integrated_snn_res.0.5", label = T, label.size = 6)
+dev.off()
+
+DefaultAssay(samples.integrated) <- "RNA"
+
+VlnPlot(samples.integrated, features = c("GRCh38-SMARCB1", "mm10-Smarcb1"), group.by = "species.orig")
+
+smarcbp.cells.hum <- WhichCells(samples.integrated, expression = `GRCh38-SMARCB1` > 0.05)
+tiff("UMAP_Smarcb1_pos_cells_hum.tiff", width = 900, height = 700)
+DimPlot(object = samples.integrated, pt.size = 0.8, cells.highlight = smarcbp.cells.hum, cols.use = "gray", cols.highlight = "darkred", plot.order = smarcbp.cells.hum) + ggtitle("SMARCB1 positive cells")
+dev.off()
+
+smarcbp.cells.mou <- WhichCells(samples.integrated, expression = `mm10-Smarcb1` > 0.05)
+tiff("UMAP_Smarcb1_pos_cells_mou.tiff", width = 900, height = 700)
+DimPlot(object = samples.integrated, pt.size = 0.8, cells.highlight = smarcbp.cells.mou, cols.use = "gray", cols.highlight = "darkred", plot.order = smarcbp.cells.mou) + ggtitle("Smarcb1 positive cells")
+dev.off()
+
+tiff("UMAP_coexpr_SMARCB1_hum_mou.tiff", width = 900, height = 700)
+DimPlot(object = samples.integrated, pt.size = 0.8, cells.highlight = list(smarcbp.cells.hum, smarcbp.cells.mou), cols.use = "gray", cols.highlight = c("darkred", "darkorchid4"), plot.order = c(smarcbp.cells.hum, smarcbp.cells.mou)) + ggtitle("Smarcb1 positive cells")
+dev.off()
+
+
+
+
+# Create a table with number of cells by sample / cluster
+df <- data.frame(sample = as.character(samples.integrated$orig.ident), 
+                 cluster = as.character(samples.integrated$integrated_snn_res.0.5), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, sample) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~sample)
+WriteXLS(final, ExcelFileName = "cellNumber_sampleBYclusters.xlsx", row.names = F)
+  
+# Create a table with number of cells by species / cluster
+df <- data.frame(species = as.character(samples.integrated$species.orig), 
+                 cluster = as.character(samples.integrated$integrated_snn_res.0.5), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, species) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~species)
+WriteXLS(final, ExcelFileName = "cellNumber_speciesBYclusters.xlsx", row.names = F)
+```
+
+## Investigate status of hybrid cells
+
+```{r fvrngui}
+count.mat <- GetAssayData(samples.integrated, slot = "counts", assay = "RNA")
+dim(count.mat)
+hum.ind <- grep("GRCh38-", rownames(count.mat))
+mou.ind <- grep("mm10-", rownames(count.mat))
+
+count_thr <- 5
+n_genes_hum <- apply(count.mat[hum.ind,], 2, function(x) sum(x >= count_thr))
+n_genes_mou <- apply(count.mat[mou.ind,], 2, function(x) sum(x >= count_thr))
+
+scatter_df <- data.frame(n_genes_hum = n_genes_hum, n_genes_mou= n_genes_mou, species = samples.integrated$species.orig)
+
+ggplot(scatter_df, aes(x = n_genes_hum, y = n_genes_mou, color = species)) +
+  geom_point() 
+
+# remove human and mouse cells
+scatter_df <- scatter_df[scatter_df$species == "hybrid",]
+
+
+
+ggplot(scatter_df, aes(x = n_genes_hum, y = n_genes_mou, color = species)) +
+  geom_point() + 
+  geom_abline(slope = .3, intercept = 30) + 
+  geom_abline(slope = 1.4, intercept = -40)
+
+
+hum_line <- function(x){
+  y <- .3*x + 30
+  return(y)
+}
+
+mou_line <- function(x){
+  y <- 1.4*x - 40
+  return(y)
+}
+
+
+ind_hum_line <- which(hum_line(scatter_df$n_genes_hum) >= scatter_df$n_genes_mou)
+scatter_df[ind_hum_line, "label"] <- "human"
+ind_mou_line <- which(mou_line(scatter_df$n_genes_hum) <= scatter_df$n_genes_mou)
+scatter_df[ind_mou_line, "label"] <- "mouse"
+
+low_genes <- intersect(ind_hum_line, ind_mou_line)
+scatter_df[low_genes, "label"] <- "low_n_genes"
+
+scatter_df[is.na(scatter_df$label), "label"] <- "hybrid"
+
+ggplot(scatter_df, aes(x = n_genes_hum, y = n_genes_mou, color = label)) +
+  geom_point() + 
+  geom_abline(slope = .3, intercept = 30) + 
+  geom_abline(slope = 1.4, intercept = -40)
+
+tiff("COO_nod_hybridClassif.tiff", width = 600, height = 700)
+ggplot(scatter_df, aes(x = n_genes_hum, y = n_genes_mou, color = label)) +
+  geom_point() + 
+  geom_abline(slope = .3, intercept = 30) + 
+  geom_abline(slope = 1.4, intercept = -40)
+dev.off()
+
+samples.integrated$species.lab <- samples.integrated$species.orig
+samples.integrated$species.lab[rownames(scatter_df)] <- scatter_df$label
+
+
+tiff("UMAP_integrated_species_new_lab.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, group.by = "species.lab", pt.size = 0.8)
+dev.off()
+
+tiff("UMAP_integrated_species_new_lab_split.tiff", width = 1100, height = 800)
+DimPlot(samples.integrated, split.by = "species.lab", pt.size = 0.8, ncol = 2)
+dev.off()
+
+
+```
+
+
+
+## Find markers
+
+```{r cd}
+DefaultAssay(samples.integrated) <- "RNA"
+
+for (i in levels(Idents(samples.integrated))){
+  markers <- FindMarkers(samples.integrated, ident.1 = i, test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("COO_NODSCID_markers_", i, ".xlsx"), row.names = T)
+}
+
+
+```
+
+#### Cell cycle scoring
+
+```{r fneiog}
+cell.cycle.genes <- read_excel("/marta_home/scRNAseq_Ranalysis/markers/cell_cycle_markers_Tirosh.xlsx", skip = 1)
+s.genes <- cell.cycle.genes$`G1/S`
+g2m.genes <- cell.cycle.genes$`G2/M`
+
+s.genes <- s.genes[!is.na(s.genes)]
+g2m.genes <- g2m.genes[!is.na(g2m.genes)]
+
+s.genes.hum <- paste0("GRCh38-", s.genes)
+g2m.genes.hum <- paste0("GRCh38-", g2m.genes)
+
+s.genes.mou <- paste0("mm10-", capitalize(tolower(s.genes)))
+g2m.genes.mou <- paste0("mm10-", capitalize(tolower(g2m.genes)))
+
+s.genes <- c(s.genes.hum, s.genes.mou)
+g2m.genes <- c(g2m.genes.hum, g2m.genes.mou)
+
+s.genes <- s.genes[s.genes %in% rownames(samples.integrated)]
+g2m.genes <- g2m.genes[g2m.genes %in% rownames(samples.integrated)]
+
+samples.integrated <- CellCycleScoring(samples.integrated, s.features = s.genes, g2m.features = g2m.genes)
+
+tiff("UMAP_CCphase.tiff", width = 900, height = 700)
+DimPlot(samples.integrated, pt.size = 0.8, group.by = "Phase", cols = c("#1f77b4", "#ff7f0e", "#279e68"))
+dev.off()
+
+```
+
+
+# Plot markers
+
+
+```{r cdnio}
+
+genes <- c("Bmp4", "Ly6d", "Sparc", "S100a13", "Sfn", "Fhl2", "Cd68", "Osm", "Ifitm2", "Irf7", "Tet1", "Tet2", "Tet3", "Ezh2", "Kdm6a", "Kdm5a", "Dnmt1", "Dnmt3a", "Dnmt3b")
+
+for(g in genes){
+  tiff(paste0("./markers/feat_",g, "_hum.tiff"), width = 900, height = 700)
+  print(FeaturePlot(samples.integrated, features = paste0("GRCh38-", toupper(g)), pt.size = 0.8, order = T))
+  dev.off()
+  tiff(paste0("./markers/feat_",g, "_mou.tiff"), width = 900, height = 700)
+  print(FeaturePlot(samples.integrated, features = paste0("mm10-", g), pt.size = 0.8, order = T))
+  dev.off()
+}
+
+
+```
+
+
+
+# Gene expression programs
+
+```{r annotcd}
+# markers cell types
+list.mark <- as.list(read_excel("/marta_home/scRNAseq_Ranalysis/markers/markers_ATRTfinal2.xlsx", col_names = T))
+list.mark <- lapply(list.mark, function(x) x[!is.na(x)])
+list.mark <- list.mark[-c(1,2,4)]
+
+list.mark <- lapply(list.mark, function(x) c(paste0("mm10-",x), paste0("GRCh38-", toupper(x))))
+
+samples.integrated <- myaddModule_CellType(samples.integrated, list.mark)
+
+# Create vector of colors
+my_color_palette <- RColorBrewer::brewer.pal(length(unique(samples.integrated$CellType)), "Paired")
+#my_color_palette[11] <- "goldenrod"
+my_color_palette[10] <- "slategrey"
+
+tiff("UMAP_integrated_CellType_annot.tiff", width = 900, height = 700)
+DimPlot(object = samples.integrated , pt.size = 0.8, cols = my_color_palette, group.by = "CellType")  +  theme(legend.text=element_text(size=13))
+dev.off()
+
+```

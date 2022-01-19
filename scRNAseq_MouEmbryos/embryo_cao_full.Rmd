@@ -1,0 +1,173 @@
+---
+title: "Embryo Cao full"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(reticulate)
+library(rsvd)
+library(Matrix)
+library(monocle)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(tidyr)
+library(plyr)
+library(readxl)
+library(Hmisc)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Cao")
+
+
+```
+
+
+### Cao dataset
+
+```{r cfnui}
+
+cao.all <- readRDS("/marta_home/single-cellPUB/Cao_mouse_organogenesis/cds_cleaned.RDS")
+cao.count <- cao.all@assayData$exprs
+dim(cao.count)
+head(colnames(cao.count))
+
+cao.pheno <- cao.all@phenoData@data
+head(rownames(cao.pheno))
+
+# Add info on the cell type
+cao.cell.ann <- read.csv("/marta_home/single-cellPUB/Cao_mouse_organogenesis/cell_annotate.csv")
+
+cao.pheno$celltype <- cao.cell.ann[match(colnames(cao.count), cao.cell.ann$sample), "Main_cell_type"]
+
+#Table with cell number by celltype/stage
+df <- data.frame(celltype = as.character(cao.pheno$celltype), 
+                 stage = as.character(cao.pheno$day), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(stage, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, stage~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYstage_Cao.xlsx", row.names = F)
+
+#Table with cell number by trajectory/stage
+df <- data.frame(trajectory = as.character(cao.pheno$Sub_trajectory_name), 
+                 stage = as.character(cao.pheno$day), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(stage, trajectory) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, stage~trajectory)
+WriteXLS(final, ExcelFileName = "cellNumber_trajectory_nameBYstage_Cao.xlsx", row.names = F)
+
+cao.feature <- cao.all@featureData@data
+head(cao.feature$gene_short_name)
+
+# rename matrix with gene names
+rownames(cao.count) <- cao.feature$gene_short_name
+
+# Create seurat object
+cao <- CreateSeuratObject(counts = cao.count, meta.data = cao.pheno)
+  
+saveRDS(cao, file = "full_cao.rds")
+cao.pgcs <- subset(cao, subset = Sub_trajectory_name == "Primordial germ cell trajectory")
+dim(cao.pgcs)
+
+
+
+### Analysis of PGC to plot the markers
+
+# Normalize
+cao.pgcs <- NormalizeData(cao.pgcs)
+cao.pgcs <- FindVariableFeatures(cao.pgcs, selection.method = "vst", nfeatures = 2000)
+
+# Plot UMAP
+cao.pgcs <- ScaleData(cao.pgcs)
+
+cao.pgcs <- RunPCA(cao.pgcs)
+ElbowPlot(cao.pgcs, ndims = 50)
+cao.pgcs <- RunUMAP(cao.pgcs, dims = 1:10)
+
+tiff("caoPGC_day.tiff", width = 800, height = 800)
+DimPlot(cao.pgcs, group.by = "day", pt.size = 1.5)
+dev.off()
+
+tiff("caoPGCs_celltype.tiff", width = 800, height = 800)
+DimPlot(cao.pgcs, group.by = "celltype", pt.size = 1.5)
+dev.off()
+
+tiff("caoPGCs_tex14.tiff", width = 800, height = 800)
+FeaturePlot(cao.pgcs, features = "Tex14", pt.size = 1.5, order = T)
+dev.off()
+
+
+saveRDS(cao.pgcs, file = "Cao_PGCs.rds")
+
+```
+
+## Plot PGCs markers
+
+```{r cnduigds}
+pgc.hum <- read_xlsx("../PGC specific marker expression.xlsx", sheet=1)
+cat <- colnames(pgc.hum)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.hum[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(cao.pgcs)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/human/", cat, "_",  gene, ".tiff"), width = 800, height = 800)
+  print(FeaturePlot(cao.pgcs, features = gene, pt.size = 1.5, order = T))
+  dev.off()
+  }
+}
+  
+
+pgc.mou <- read_xlsx("../PGC specific marker expression.xlsx", sheet=2)
+cat <- colnames(pgc.mou)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.mou[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(cao.pgcs)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/mouse/", cat, "_",  gene, ".tiff"), width = 800, height = 800)
+  print(FeaturePlot(cao.pgcs, features = gene, pt.size = 1.5, order = T))
+  dev.off()
+  }
+}
+
+pgc.pred <- read_xlsx("../PGC_predictors4plotting.xlsx", sheet=1)
+cat <- colnames(pgc.pred)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.pred[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(cao.pgcs)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/predictors/", cat, "_",  gene, ".tiff"), width = 800, height = 800)
+  print(FeaturePlot(cao.pgcs, features = gene, pt.size = 1.5, order = T))
+  dev.off()
+  }
+}
+
+
+```
+
+
+# Get Sox2 pos cells
+
+```{r csiofd}
+DefaultAssay(cao) <- "RNA"
+sox2pos.cells <- WhichCells(cao, expression = Sox2 > 0.1)
+ncol(cao)
+100*(length(sox2pos.cells) / ncol(cao))
+```

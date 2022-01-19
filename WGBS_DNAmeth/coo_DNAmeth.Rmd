@@ -1,0 +1,562 @@
+---
+title: "COO DNAmeth analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(minfi)
+library(limma)
+library(RColorBrewer)
+library(GEOquery)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(IlluminaHumanMethylation450kmanifest)
+library(readxl)
+library(data.table)
+library(scales)
+library(pheatmap)
+library(corrplot)
+
+
+setwd("/marta_home/DNAmeth/COO/v2")
+source("/marta_home/DNAmeth/mergeWGBSto450k.R")
+load("/marta_home/DNAmeth/COO/v2/workspace.RData")
+#source("~/RTanalysis/code/variationFiltGRS.R")
+```
+
+Datasets used:
+** Tumor:
+- Johann et al (Kool) ATRT 450K array
+
+** Healthy:
+- Guo et al (WGBS): bed files, aligned to hg19. Human PGCs, heart, brain, soma.
+- Spiers et al (450k array): human fetal brain, to compare to SHH. GSE58885
+
+#### Tumors
+
+```{r nvdu}
+## Kool 450k
+idatFiles <- list.files("/marta_home/DNAmeth/ATRT_Kool/data/GSE70460_RAW/idat", pattern = "idat$", full = TRUE)
+#sapply(idatFiles, gunzip, overwrite = TRUE)
+kool <- read.metharray.exp("/marta_home/DNAmeth/ATRT_Kool/data/GSE70460_RAW/idat")
+kool
+
+colnames(kool)
+
+# Get phenodata from GEO
+gse70460 <- getGEO('GSE70460')
+kool.pheno <- pData(phenoData(gse70460[[1]]))
+
+head(kool.pheno)
+geo.names <- unlist(sapply(strsplit(colnames(kool), "_"), function(x) x[1]))
+
+colnames(kool) <- kool.pheno[match(geo.names, kool.pheno$geo_accession), "title"]
+kool
+
+# Quality control
+# calculate the detection p-values
+detP <- detectionP(kool)
+head(detP)
+
+barplot(colMeans(detP), ylab="Mean detection p-values")
+# since the threshold should be 0.05, we keep that sample in. But let's look at which sample is that
+colnames(detP)[colMeans(detP)>0.006]
+qcReport(kool, pdf="Kool_qcReport.pdf")
+
+# Get info on subgroup
+table.paper <- read_xlsx("/marta_home/DNAmeth/ATRT_Kool/table_paper.xlsx", sheet = "Sample inventory", skip = 1)
+
+kool.pheno$subgroup <- table.paper$`Subgrouping based on 450K methylation data`[match(kool.pheno$title, table.paper$`Sample Name`)]
+
+
+
+#manifest <- getManifest(kool)
+#head(getProbeInfo(manifest))
+
+#preprocessing and normalization
+kool.quantile <- preprocessQuantile(kool, fixOutliers = TRUE,
+  removeBadSamples = TRUE, badSampleCutoff = 10.5,
+  quantileNormalize = TRUE, stratified = TRUE,
+  mergeManifest = FALSE, sex = NULL)
+kool.quantile
+
+# create a MethylSet object from the raw data for plotting
+kool.mSetRaw <- preprocessRaw(kool)
+
+############################# FOR M values minfi is using log2(M/U) !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+# visualise what the data looks like before and after normalisation
+par(mfrow=c(1,2))
+densityPlot(getBeta(kool.mSetRaw),main="Raw", legend=FALSE)
+densityPlot(getBeta(kool.quantile), main="Normalized", legend=FALSE)
+
+
+# Filter probes
+# get the 450k annotation data
+ann450k <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+# if your data includes males and females, remove probes on the sex chromosomes
+keep <- !(featureNames(kool.quantile) %in% ann450k$Name[ann450k$chr %in% 
+                                                        c("chrX","chrY")])
+table(keep)
+kool.quantileFlt <- kool.quantile[keep,]
+kool.quantileFlt
+
+# remove probes with SNPs at CpG site
+kool.quantileFlt <- dropLociWithSnps(kool.quantileFlt)
+kool.quantileFlt
+
+#We will also filter out probes that have shown to be cross-reactive, that is, probes that have been demonstrated to map to multiple places in the genome. This list was originally published by Chen et al. (2013)
+
+# exclude cross reactive probes 
+xReactiveProbes <- read_xlsx("/marta_home/DNAmeth/48639-non-specific-probes-Illumina450k.xlsx")
+keep <- !(featureNames(kool.quantileFlt) %in% xReactiveProbes$TargetID)
+table(keep)
+
+kool.quantileFlt <- kool.quantileFlt[keep,]
+kool.quantileFlt
+
+saveRDS(kool.quantileFlt, file = "kool_qntFlt.rds")
+saveRDS(kool, file = "kool_pre_norm.rds")
+
+kool.quantileFlt <- readRDS("kool_qntFlt.rds")
+# Getting Beta values for clustering
+kool.beta <- getBeta(kool.quantileFlt)
+kool.beta[1:5,1:5]
+
+# Getting M values
+kool.m <- getM(kool.quantileFlt)
+kool.m[1:5,1:5]
+
+
+
+# # get features data
+# kool.feat <- featureData(gse70460[[1]])
+# kool.feat <- kool.feat@data
+# head(kool.feat)
+# 
+# sum(rownames(kool) %in% kool.feat$AddressA_ID)
+# # rownames of kool is AddressA_ID of kool.feat -> we want to reduce the rows to those
+# 
+# probes.name <- kool.feat[match(rownames(kool), kool.feat$AddressA_ID), "ID"]
+# # exclude probes with NA value as name 
+# kool <- kool[!is.na(probes.name), ]
+# probes.name <- probes.name[!is.na(probes.name)]
+# #rename kool's rownames with probe name
+# rownames(kool) <- probes.name
+# kool
+# 
+# # annotation probes
+
+# head(ann450k)
+# sum(rownames(ann450k) %in% rownames(kool))
+# 
+
+```
+
+# Human fetal brain from Spiers
+
+
+```{r nvui}
+
+gse58885 <- getGEO('GSE58885')
+spiers.pheno <- pData(phenoData(gse58885[[1]]))
+spiers.feat <- featureData(gse58885[[1]])@data
+spiers.data <- exprs(gse58885[[1]])  ## Normalized beta values from wateRmelon
+rownames(spiers.data)[1:5]
+
+# Filter probes
+
+# if your data includes males and females, remove probes on the sex chromosomes
+table(spiers.feat$CHR)
+keep <- !(spiers.feat$CHR %in% c("X", "Y"))
+sum(keep)
+all.equal(rownames(spiers.data), spiers.feat$ID)
+
+spiers.data <- spiers.data[keep,]
+dim(spiers.data)
+
+# remove probes with SNPs at CpG site
+sum(spiers.feat$Probe_SNPs_10 != "")
+keep.id <- spiers.feat$ID[spiers.feat$Probe_SNPs_10 == ""]
+spiers.data <- spiers.data[rownames(spiers.data) %in% keep.id,]
+dim(spiers.data)
+
+
+#We will also filter out probes that have shown to be cross-reactive, that is, probes that have been demonstrated to map to multiple places in the genome. This list was originally published by Chen et al. (2013)
+
+# exclude cross reactive probes 
+xReactiveProbes <- read_xlsx("/marta_home/DNAmeth/48639-non-specific-probes-Illumina450k.xlsx")
+
+spiers.data <- spiers.data[!(rownames(spiers.data) %in% xReactiveProbes$TargetID),]
+dim(spiers.data)
+
+```
+
+## SHH and fetal brain average methylation values boxplot
+
+```{r vnfugi}
+
+dim(kool.beta)
+dim(spiers.data)
+
+kool.avg.beta <- colMeans(kool.beta)
+spiers.avg.beta <- colMeans(spiers.data, na.rm = T)
+
+all.equal(colnames(kool.beta), as.character(unlist(kool.pheno$title)))
+
+
+boxplot.df <- data.frame(pheno = c(kool.pheno$subgroup, rep("hum_fetal_brain", ncol(spiers.data))),
+                         beta = c(kool.avg.beta, spiers.avg.beta))
+library(ggplot2)
+ggplot(boxplot.df, aes(x=pheno, y=beta,  fill = pheno)) + 
+  geom_boxplot()
+
+
+```
+
+## Considering only promoter associated probes
+
+```{r vnriogh}
+
+promoter_probes <- rownames(ann450k)[ann450k$Regulatory_Feature_Group %in% c("Promoter_Associated", "Promoter_Associated_Cell_type_specific")]
+dim(kool.beta)
+dim(spiers.data)
+
+kool.beta.prom <- kool.beta[rownames(kool.beta) %in% promoter_probes,]
+spiers.data.prom <- spiers.data[rownames(spiers.data) %in% promoter_probes,]
+dim(kool.beta.prom)
+dim(spiers.data.prom)
+
+kool.avg.beta <- colMeans(kool.beta.prom)
+spiers.avg.beta <- colMeans(spiers.data.prom, na.rm = T)
+
+
+
+boxplot.df <- data.frame(pheno = c(kool.pheno$subgroup, rep("hum_fetal_brain", ncol(spiers.data))),
+                         beta = c(kool.avg.beta, spiers.avg.beta))
+library(ggplot2)
+
+tiff("boxplot_avg_beta_promoters.tiff", width = 600, height = 900)
+ggplot(boxplot.df, aes(x=pheno, y=beta,  fill = pheno)) + 
+  geom_boxplot()
+dev.off()
+
+
+
+
+```
+
+
+### Germ cell tumors from Fukushima
+
+
+```{r vnfuih}
+
+gct.full <- read.csv("/marta_home/DNAmeth/Fukushima_germinomas/GSE70783_GA_illumina_methylation_Matrix_signal_intensities.csv.gz", skip = 3, stringsAsFactors=F, header = T)
+colnames(gct.full)
+cols <- as.character(unlist(gct.full[1,]))[-1]
+rows <- as.character(unlist(gct.full[,1]))[-1]
+head(rows)
+gct.full.mat <- as.matrix(gct.full[-1,-1])
+gct.full.mat[1:5,1:5]
+
+gct.full.mat <- sapply(gct.full.mat, as.numeric)
+gct.full.mat <- matrix(gct.full.mat, ncol = length(cols), nrow = length(rows))
+gct.full.mat[1:5,1:5]
+
+rownames(gct.full.mat) <- rows
+colnames(gct.full.mat) <- cols
+dim(gct.full.mat)
+
+gct.samples <- unique(unlist(sapply(strsplit(cols, " "), function(x) x[1])))
+cols <- gsub(" ", "_", cols)
+colnames(gct.full.mat) <- cols
+
+gct.beta <- matrix(0, ncol = length(gct.samples), nrow = length(rows))
+rownames(gct.beta) <- rows
+colnames(gct.beta) <- gct.samples
+
+gct.M <- matrix(0, ncol = length(gct.samples), nrow = length(rows))
+rownames(gct.M) <- rows
+colnames(gct.M) <- gct.samples
+
+
+for(sam in gct.samples){
+  ind.sam <- grep(paste0(sam, "_"), colnames(gct.full.mat))
+  gct.beta[, sam] <- (gct.full.mat[, ind.sam[2]])/(gct.full.mat[, ind.sam[2]] + gct.full.mat[, ind.sam[1]] + 100) 
+  gct.M[, sam] <- log2(gct.full.mat[, ind.sam[2]]/gct.full.mat[, ind.sam[1]])
+}
+gct.beta[1:5,1:5]
+gct.M[1:5,1:5]
+
+```
+
+
+#### Primordial germ cells from Guo et al. + other tissues
+
+```{r cmdisof}
+# Load the Illumina 450k Methylation Array for merging
+illumData <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+illumDataFrame <- as.data.frame(illumData@listData)
+# filter probes to Kool's ones
+illumDataFrame <- illumDataFrame[illumDataFrame$Name %in% rownames(kool.quantileFlt),]
+illumDataFrame.sub <- illumDataFrame[, c("chr", "pos", "Name")]
+
+illumDataTable <- data.table(illumDataFrame.sub)
+
+fileDir <- "/marta_home/WGBS/Guo_PGCs/bed"
+fileKeys <- c("#Chr", "Pos")
+outputFileDir <- "/marta_home/WGBS/Guo_PGCs_geo/450k_Rdata"
+  
+mergeWGBSto450k(illumDataTable, fileDir, fileKeys, fileSkipLine = 0, outputFileDir)
+
+# Load wgbs data - reduced to 450k
+wgbs.files <- list.files(outputFileDir, pattern = ".rds")
+for(i in 1:length(wgbs.files)){
+  wgbs.mat <- readRDS(file.path(outputFileDir, wgbs.files[i]))
+  print(wgbs.files[i])
+  sample.name <- sub("GSE63818_", "", wgbs.files[i])
+  sample.names <- sub("_methylation_calling.rds", "", sample.name)
+  if(i == 1){
+    # meth
+    guo.met <- as.matrix(wgbs.mat[, "Met"])
+    colnames(guo.met) <- sample.name
+    rownames(guo.met) <- as.character(wgbs.mat$Name)
+    #unmet
+    guo.unmet <- as.matrix(wgbs.mat[, "UnMet"])
+    colnames(guo.unmet) <- sample.name
+    rownames(guo.unmet) <- as.character(wgbs.mat$Name)
+  } else {
+    #met
+    guo.met.tmp <- as.matrix(wgbs.mat[, "Met"])
+    colnames(guo.met.tmp) <- sample.name
+    rownames(guo.met.tmp) <- as.character(wgbs.mat$Name)
+    #unmet
+    guo.unmet.tmp <- as.matrix(wgbs.mat[, "UnMet"])
+    colnames(guo.unmet.tmp) <- sample.name
+    rownames(guo.unmet.tmp) <- as.character(wgbs.mat$Name)
+    # subset rownames to only intersecting probes
+    print(dim(guo.met))
+    print(dim(guo.met.tmp))
+
+    int.probes <- intersect(rownames(guo.met), rownames(guo.met.tmp))
+    print(length(int.probes))
+
+    guo.met <- guo.met[int.probes,]
+    guo.unmet <- guo.unmet[int.probes,]
+    guo.met.tmp <- guo.met.tmp[int.probes,]
+    guo.unmet.tmp <- guo.unmet.tmp[int.probes,]
+
+    guo.met <- cbind(guo.met, guo.met.tmp)
+    guo.unmet <- cbind(guo.unmet, guo.unmet.tmp)
+
+  }
+    
+  
+}
+
+sample.names <- sub("GSE63818_", "", wgbs.files)
+sample.names <- sub("_methylation_calling.rds", "", sample.names)
+colnames(guo.met) <- sample.names  
+colnames(guo.unmet) <- sample.names  
+
+# Calculating the total reads per probe site
+guo.totReads <- guo.met + guo.unmet
+
+guo.met[1:5,1:5]  
+guo.unmet[1:5,1:5] 
+guo.totReads[1:5,1:5] 
+
+# excluding probes that have tot reads = 1 in any sample
+#min.perc <- round(ncol(guo.totReads)*0.1)
+
+n.probes1 <- apply(guo.totReads, 1, function(x) sum(x == 1))
+head(n.probes1)
+#keep.guo.probes <- n.probes1[n.probes1 < min.perc]
+keep.guo.probes <- n.probes1[n.probes1 > 1]
+
+guo.met.filt <- guo.met[names(keep.guo.probes), ]
+guo.unmet.filt <- guo.unmet[names(keep.guo.probes), ]
+
+guo.beta <- matrix(0, ncol = length(sample.names), nrow = length(rownames(guo.met.filt)))
+rownames(guo.beta) <- rownames(guo.met.filt)
+colnames(guo.beta) <- sample.names
+
+guo.m <- matrix(0, ncol = length(sample.names), nrow = length(rownames(guo.met.filt)))
+rownames(guo.m) <- rownames(guo.met.filt)
+colnames(guo.m) <- sample.names
+
+
+for(sam in sample.names){
+  guo.beta[, sam] <- (guo.met.filt[, sam])/(guo.met.filt[, sam] + guo.unmet.filt[, sam] + 0.001) 
+  guo.m[, sam] <- log2(guo.met.filt[,sam]+0.00001/(guo.unmet.filt[, sam] +0.00001))
+}
+guo.beta[1:5,1:5]
+guo.m[1:5,1:5]
+guo.met.filt[1:5, 1:5]
+guo.unmet.filt[1:5, 1:5]
+
+guo.pgc.beta <- guo.beta[, grep("PGC", colnames(guo.beta))]
+dim(guo.pgc.beta)
+guo.pgc.avg.beta <- colMeans(guo.pgc.beta)
+
+boxplot.df <- data.frame(pheno = c(kool.pheno$subgroup, rep("hum_fetal_brain", ncol(spiers.data)),
+                                   rep("pgc", ncol(guo.pgc.beta))),
+                         beta = c(kool.avg.beta, spiers.avg.beta, guo.pgc.avg.beta))
+library(ggplot2)
+g <- ggplot(boxplot.df, aes(x=pheno, y=beta,  fill = pheno)) + 
+  geom_boxplot() + 
+  ylab("Average beta values") +
+  theme(text = element_text(size = 20)) +
+  theme_minimal()
+
+tiff("boxplot_avg_beta.tiff", width = 600, height = 900)
+print(g)
+dev.off()
+
+# Without fetal brain
+boxplot.df <- data.frame(pheno = c(kool.pheno$subgroup, 
+                                   rep("pgc", ncol(guo.pgc.beta))),
+                         beta = c(kool.avg.beta,  guo.pgc.avg.beta))
+tiff("DNA_methyl_boxplot_avg_betaTUM_PGC.tiff", width = 600, height = 600)
+print(ggplot(boxplot.df, aes(x=pheno, y=beta,  fill = pheno)) + 
+  geom_boxplot() + 
+  ylab("Average beta values") +
+    xlab("Phenotype") +
+  theme_minimal() + 
+  theme(text = element_text(size = 20)) 
+)
+dev.off()
+
+```
+
+
+
+
+### Putting together datasets and clustering
+
+
+
+```{r cndsfgvi}
+keep <- intersect(rownames(gct.beta), rownames(kool.beta))
+keep <- intersect(keep, rownames(guo.beta))
+
+kool.beta <- kool.beta[keep,]
+gct.beta <- gct.beta[keep,]
+guo.beta <- guo.beta[keep,]
+all.beta <- cbind(kool.beta, gct.beta, guo.beta)
+dim(all.beta)
+
+kool.m <- kool.m[keep,]
+gct.M <- gct.M[keep,]
+guo.m <- guo.m[keep,]
+all.m <- cbind(kool.m, gct.M, guo.m)
+dim(all.m)
+
+
+# Select probes with highest variance
+all.var <- rowVars(all.beta)
+summary(all.var)
+names(all.var) <- rownames(all.beta)
+ordered.var <- sort(all.var, decreasing = T)
+keep75 <- names(ordered.var[1:7500])
+keep2 <- names(ordered.var[1:2000])
+
+filt.all.beta75 <- all.beta[keep75,]
+dim(filt.all.beta75)
+colnames(filt.all.beta75)
+
+kool.sub <- as.character(unlist(kool.pheno$subgroup))
+gct.sub <- gsub(pattern = "[[:digit:]]", "", colnames(gct.beta))
+guo.sub <- paste(unlist(sapply(strsplit(colnames(guo.met), "_"), function(x) x[1])), unlist(sapply(strsplit(colnames(guo.met), "_"), function(x) x[2])), sep = "_")
+annotation_col <- data.frame(subgroup = c(kool.sub, gct.sub, guo.sub), row.names = colnames(filt.all.beta75))
+
+pheatmap(filt.all.beta75, scale = "row", cluster_cols = T, cluster_rows = T, clustering_distance_rows = "euclidean", clustering_distance_cols = "euclidean", clustering_method = "ward.D2", annotation_col = annotation_col, show_rownames = F, show_colnames = T, filename = "clustering_koolGuoGCT_euc_row75.tiff")
+
+pheatmap(filt.all.beta75, scale = "row", cluster_cols = T, cluster_rows = T, clustering_distance_rows = "correlation", clustering_distance_cols = "correlation", clustering_method = "ward.D2", annotation_col = annotation_col, show_rownames = F, show_colnames = T, filename = "clustering_koolGuoGCT_cor_row75.tiff", fontsize_col=5)
+
+
+filt.all.beta2 <- all.beta[keep2,]
+pheatmap(filt.all.beta2, scale = "row", cluster_cols = T, cluster_rows = T, clustering_distance_rows = "correlation", clustering_distance_cols = "correlation", clustering_method = "ward.D2", annotation_col = annotation_col, show_rownames = F, show_colnames = T, filename = "clustering_koolGuoGCT_cor_row_2k.tiff")
+
+
+filt.all.beta.rnd75 <- all.beta[rownames(all.beta)[sample(1:nrow(all.beta), size = 7500)],]
+
+pheatmap(filt.all.beta.rnd75, scale = "row", cluster_cols = T, cluster_rows = T, clustering_distance_rows = "correlation", clustering_distance_cols = "correlation", clustering_method = "ward.D2", annotation_col = annotation_col, show_rownames = F, show_colnames = T, filename = "clustering_koolGuoGCT_cor_row_rand.tiff")
+
+# reduce samples to their subgroup by calculating mean value
+colnames(all.beta) <- annotation_col$subgroup
+reduced.all.beta <- t(apply(all.beta, 1, function(x) tapply(x, colnames(all.beta), mean)))
+dim(reduced.all.beta)
+
+
+# Looking for clusters of probes using only MYC samples
+probes.clusters <- hclust(dist(all.beta[, grep("MYC", colnames(all.beta))], method = "euclidean"), method = "ward.D2")
+plot(probes.clusters, labels = F)
+
+probes.clust.cut <- cutree(probes.clusters, k=20)
+
+
+for (clust in unique(probes.clust.cut)){
+  red.beta.clust <- reduced.all.beta[names(probes.clust.cut[probes.clust.cut == clust]),]
+  beta.clust.cor <- cor(red.beta.clust, method = "pearson")
+  
+  
+  tiff(paste0("probes_clust", clust, "_corrplot.tiff"), width = 900, height = 900)
+  corrplot(beta.clust.cor, type = "lower")
+  dev.off()
+}
+
+
+plot(density(reduced.all.beta[, colnames(reduced.all.beta) == "MYC"]))
+plot(density(reduced.all.beta[, grep("PGC", colnames(reduced.all.beta))]))
+plot(density(reduced.all.beta[, grep("Soma", colnames(reduced.all.beta))]))
+plot(density(reduced.all.beta[, grep("GCT", colnames(reduced.all.beta))]))
+
+library(umap)
+
+data.umap <- umap(filt.all.beta2, random_state = 123)
+
+plot.umap(data.umap, labels = annotation_col$subgroup)
+
+plot.umap <- function(x, labels,
+         main=NULL,
+         colors=hue_pal()(length(unique(labels))),
+         pad=0.1, cex=0.65, pch=19, add=FALSE, legend.suffix="",
+         cex.main=1, cex.legend=1) {
+
+  layout = x
+  if (is(x, "umap")) {
+    layout = x$layout
+  }
+
+  xylim = range(layout)
+  xylim = xylim + ((xylim[2]-xylim[1])*pad)*c(-0.5, 0.5)
+  if (!add) {
+    par(mar=c(0.2,0.7,1.2,0.7), ps=10)
+    plot(xylim, xylim, type="n", axes=F, frame=F)
+    rect(xylim[1], xylim[1], xylim[2], xylim[2], border="#aaaaaa", lwd=0.25)
+  }
+  points(layout[,1], layout[,2], col=colors[as.integer(labels)],
+         cex=cex, pch=pch)
+  mtext(side=3, main, cex=cex.main)
+
+  labels.u = unique(labels)
+  legend.pos = "topright"
+  legend.text = as.character(labels.u)
+  if (add) {
+    legend.pos = "bottomright"
+    legend.text = paste(as.character(labels.u), legend.suffix)
+  }
+  legend(legend.pos, legend=legend.text,
+         col=colors[as.integer(labels.u)],
+         bty="n", pch=pch, cex=cex.legend)
+}
+
+library(M3C)
+M3C::umap(filt.all.beta2, labels = as.factor(annotation_col$subgroup) )
+```

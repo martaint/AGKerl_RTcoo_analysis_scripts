@@ -1,0 +1,215 @@
+---
+title: "Marioni - PGCs"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(SeuratData)
+library(reticulate)
+library(rsvd)
+library(Matrix)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(tidyr)
+library(plyr)
+library(readxl)
+library(Hmisc)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Marioni")
+marioni.integrated <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Marioni/full_marioni_integrated.rds")
+
+```
+
+## Marioni 
+
+```{r vnfue}
+
+marioni.mat <- Read10X(data.dir = "/marta_home/single-cellPUB/Marioni_embryos/")
+dim(marioni.mat)
+head(rownames(marioni.mat))
+head(colnames(marioni.mat))
+
+metadata <- read.table("/marta_home/single-cellPUB/Marioni_embryos/meta.tab", sep = "\t", header = T)
+head(metadata)
+
+cells2keep <- as.character(metadata$cell[!is.na(metadata$celltype)])
+
+marioni.mat <- marioni.mat[, cells2keep]
+metadata.sub <- metadata[metadata$cell %in% cells2keep, c("cell", "stage", "sequencing.batch", "celltype")]
+
+rownames(metadata.sub) <- metadata.sub$cell
+
+marioni <- CreateSeuratObject(counts = marioni.mat, meta.data = metadata.sub)
+
+# create list of objects for each sequencing batch
+marioni.list <- list(batch1 = subset(marioni, subset = sequencing.batch == "1"), batch2 = subset(marioni, subset = sequencing.batch == "2"), batch3 = subset(marioni, subset = sequencing.batch == "3"))
+
+for (i in 1:length(marioni.list)) {
+  marioni.list[[i]][["percent.mt"]] <- PercentageFeatureSet(marioni.list[[i]], pattern = "^mt-")
+  marioni.list[[i]] <- NormalizeData(marioni.list[[i]])
+  marioni.list[[i]] <- FindVariableFeatures(marioni.list[[i]], selection.method = "vst", 
+        nfeatures = 2000)
+}
+
+
+marioni.anchors <- FindIntegrationAnchors(object.list = marioni.list, dims = 1:30)
+
+features.intersection <- c(Reduce(intersect, lapply(marioni.anchors@object.list, rownames)))
+
+marioni.integrated <- IntegrateData(anchorset = marioni.anchors, features.to.integrate = features.intersection)
+
+# Plot UMAP
+marioni.integrated <- ScaleData(marioni.integrated)
+
+marioni.integrated <- RunPCA(marioni.integrated)
+marioni.integrated <- RunUMAP(marioni.integrated, dims = 1:30)
+plots <- DimPlot(marioni.integrated, group.by = c("sequencing.batch", "stage"), combine = FALSE, pt.size = 1)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 3, 
+    byrow = TRUE, override.aes = list(size = 3))))
+tiff("full_marioni_integrated.tiff", width = 1200, height = 800)
+print(CombinePlots(plots))
+dev.off()
+
+#### Separate Forebrain from Midhindbrain
+fore.mid.hind <- subset(marioni.integrated, subset = celltype == "Forebrain/Midbrain/Hindbrain")
+
+fore.markers <- c("Hesx1", "Six3", "Rax", "Pim2", "Lmo1")
+mid.hind.markers <- c("Ptn", "En1", "Hes3", "Fam181b", "Fgf15")
+
+for(gene in fore.markers){
+  tiff(paste0("./forebrain_markers/", gene, ".tiff"), width = 800, height = 700)
+  print(FeaturePlot(fore.mid.hind, features = gene, pt.size = 1, order = T))
+  dev.off()
+}
+for(gene in mid.hind.markers){
+  tiff(paste0("./midHindbrain_markers/", gene, ".tiff"), width = 800, height = 700)
+  print(FeaturePlot(fore.mid.hind, features = gene, pt.size = 1, order = T))
+  dev.off()
+}
+
+
+## Subcluster fore/mid/hind brain
+DefaultAssay(fore.mid.hind) <- "integrated"
+
+fore.mid.hind <- RunPCA(fore.mid.hind)
+fore.mid.hind <- FindNeighbors(fore.mid.hind, reduction = "pca", dims = 1:10)
+fore.mid.hind <- FindClusters(fore.mid.hind, resolution = 0.05)
+tiff("Fore_midHindbrain_subclustered.tiff", width = 800, height = 700)
+DimPlot(fore.mid.hind, pt.size = 1, group.by = "integrated_snn_res.0.05", label = T, label.size = 6)
+dev.off()
+
+
+cells.forebrain <- WhichCells(fore.mid.hind, idents = 1)
+cells.midhindbrain <- WhichCells(fore.mid.hind, idents = 0)
+
+# Rename celltypes in full dataset
+celltypes.all <- as.character(marioni.integrated$celltype)
+celltypes.all[which(colnames(marioni.integrated) %in% cells.forebrain)] <- "Forebrain"
+celltypes.all[which(colnames(marioni.integrated) %in% cells.midhindbrain)] <- "Midbrain/Hindbrain"
+marioni.integrated$celltype <- celltypes.all
+table(celltypes.all)
+
+
+tiff("full_marioni_integrated_celltype.tiff", width = 1200, height = 800)
+DimPlot(marioni.integrated, group.by = "celltype", pt.size = 0.5, label = T, label.size = 6, repel = T) +
+   theme(legend.position = "none")
+dev.off()
+
+
+tiff("full_marioni_integrated_celltype_nolab.tiff", width = 1200, height = 800)
+DimPlot(marioni.integrated, group.by = "celltype", pt.size = 0.5)
+dev.off()
+
+marioni.pgc <- subset(marioni.integrated, subset = celltype == "PGC")
+
+tiff("marioni_PGCs.tiff", width = 800, height = 800)
+DimPlot(marioni.pgc, group.by = "celltype", pt.size = 1)
+dev.off()
+tiff("marioni_PGCs_timepoint.tiff", width = 800, height = 800)
+DimPlot(marioni.pgc, group.by = "stage", pt.size = 1)
+dev.off()
+
+
+saveRDS(marioni.integrated, file = "full_marioni_integrated.rds")
+saveRDS(marioni.pgc, file = "full_marioni_integrated_PGCs.rds")
+marioni.midhind <- subset(marioni.integrated, subset = celltype == "Midbrain/Hindbrain")
+saveRDS(marioni.midhind, file = "full_marioni_integrated_midhind.rds")
+
+#Table with cell number by celltype/stage
+df <- data.frame(celltype = as.character(marioni.integrated$celltype), 
+                 stage = as.character(marioni.integrated$stage), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(stage, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, stage~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYstage_Marioni.xlsx", row.names = F)
+```
+
+
+## Plot PGCs markers
+
+```{r cnduigds}
+pgc.hum <- read_xlsx("../PGC specific marker expression.xlsx", sheet=1)
+cat <- colnames(pgc.hum)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.hum[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(marioni.integrated)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/human/", cat, "_",  gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(marioni.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+  }
+}
+  
+
+pgc.mou <- read_xlsx("../PGC specific marker expression.xlsx", sheet=2)
+cat <- colnames(pgc.mou)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.mou[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(marioni.integrated)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/mouse/", cat, "_",  gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(marioni.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+  }
+}
+
+pgc.pred <- read_xlsx("../PGC_predictors4plotting.xlsx", sheet=1)
+cat <- colnames(pgc.pred)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.pred[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(marioni.integrated)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/predictors/", cat, "_",  gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(marioni.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+  }
+}
+
+
+```
+
+# Get Sox2 pos cells
+
+```{r csiofd}
+DefaultAssay(marioni.integrated) <- "RNA"
+sox2pos.cells <- WhichCells(marioni.integrated, expression = Sox2 > 0.1)
+ncol(marioni.integrated)
+100*(length(sox2pos.cells) / ncol(marioni.integrated))
+```

@@ -1,0 +1,622 @@
+---
+title: "sc Embryos published datasets: Marioni + Cao"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+#library(SeuratData)
+library(reticulate)
+library(rsvd)
+library(Matrix)
+library(monocle)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(tidyr)
+library(plyr)
+library(readxl)
+library(Hmisc)
+
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3")
+
+
+
+embryo.reference.integrated <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/embryo_ref_int.rds")
+
+```
+
+## Marioni 
+
+```{r vnfue}
+
+marioni.mat <- Read10X(data.dir = "/marta_home/single-cellPUB/Marioni_embryos/")
+dim(marioni.mat)
+head(rownames(marioni.mat))
+head(colnames(marioni.mat))
+
+metadata <- read.table("/marta_home/single-cellPUB/Marioni_embryos/meta.tab", sep = "\t", header = T)
+head(metadata)
+
+cells2keep <- as.character(metadata$cell[!is.na(metadata$celltype)])
+cells2keep.sampled <- sample(cells2keep, 50000)
+
+
+marioni.mat <- marioni.mat[, cells2keep.sampled]
+metadata.sub <- metadata[metadata$cell %in% cells2keep.sampled, c("cell", "stage", "sequencing.batch", "celltype")]
+
+rownames(metadata.sub) <- metadata.sub$cell
+
+marioni <- CreateSeuratObject(counts = marioni.mat, meta.data = metadata.sub)
+
+# create list of objects for each sequencing batch
+marioni.list <- list(batch1 = subset(marioni, subset = sequencing.batch == "1"), batch2 = subset(marioni, subset = sequencing.batch == "2"), batch3 = subset(marioni, subset = sequencing.batch == "3"))
+
+for (i in 1:length(marioni.list)) {
+  marioni.list[[i]][["percent.mt"]] <- PercentageFeatureSet(marioni.list[[i]], pattern = "^mt-")
+  marioni.list[[i]] <- NormalizeData(marioni.list[[i]])
+  marioni.list[[i]] <- FindVariableFeatures(marioni.list[[i]], selection.method = "vst", 
+        nfeatures = 2000)
+}
+
+
+marioni.anchors <- FindIntegrationAnchors(object.list = marioni.list, dims = 1:30)
+
+features.intersection <- c(Reduce(intersect, lapply(marioni.anchors@object.list, rownames)))
+
+marioni.integrated <- IntegrateData(anchorset = marioni.anchors, features.to.integrate = features.intersection)
+
+# Plot UMAP
+marioni.integrated <- ScaleData(marioni.integrated)
+
+marioni.integrated <- RunPCA(marioni.integrated)
+marioni.integrated <- RunUMAP(marioni.integrated, dims = 1:30)
+plots <- DimPlot(marioni.integrated, group.by = c("sequencing.batch", "stage"), combine = FALSE, pt.size = 1)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 3, 
+    byrow = TRUE, override.aes = list(size = 3))))
+tiff("marioni_integrated.tiff", width = 1200, height = 800)
+print(CombinePlots(plots))
+dev.off()
+
+tiff("marioni_integrated_celltype.tiff", width = 1200, height = 800)
+DimPlot(marioni.integrated, group.by = "celltype", pt.size = 0.5)
+dev.off()
+
+
+saveRDS(marioni.integrated, file = "marioni_integrated.rds")
+saveRDS(marioni.list, file = "marioni_list.rds")
+
+
+
+### calculate proportions before / after downsampling
+
+prop.celltype.df.mar <- as.data.frame(table(metadata$celltype))
+colnames(prop.celltype.df.mar) <- c("celltype", "freq_before")
+prop.celltype.df.mar$proportion_before <- prop.celltype.df.mar$freq_before*100/sum(!is.na(metadata$celltype))
+
+prop.celltype.mar.after <- as.data.frame(table(metadata.sub$celltype))
+colnames(prop.celltype.mar.after) <- c("celltype", "freq_after")
+prop.celltype.mar.after$proportion_after <- prop.celltype.mar.after$freq_after*100/nrow(metadata.sub)
+
+prop.celltype.df.mar <- merge(prop.celltype.df.mar, prop.celltype.mar.after, by = "celltype", all.x = T)
+
+prop.long.mar <- gather(prop.celltype.df.mar, key = afterORbefore, value = proportion, c("proportion_before", "proportion_after"), factor_key = T)
+
+
+tiff("Marioni_proportions_bef_after.tiff", width = 1200, height = 600)
+ggplot(prop.long.mar, aes(fill=afterORbefore, y=proportion, x=celltype)) + 
+    geom_bar(position="dodge", stat="identity") + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+```
+
+### Cao dataset
+
+
+
+```{r cfnui}
+
+cao.all <- readRDS("/marta_home/single-cellPUB/Cao_mouse_organogenesis/cds_cleaned.RDS")
+cao.count <- cao.all@assayData$exprs
+
+cells2keep.cao <- sample(colnames(cao.count), 50000)
+cao.count.sampled <- cao.count[, cells2keep.cao]
+dim(cao.count.sampled)
+
+cao.pheno <- cao.all@phenoData@data
+head(rownames(cao.pheno))
+cao.pheno.sampled <- cao.pheno[cells2keep.cao, ]
+
+cao.feature <- cao.all@featureData@data
+head(cao.feature$gene_short_name)
+
+# rename matrix with gene names
+
+rownames(cao.count.sampled) <- cao.feature$gene_short_name
+
+# Add info on the cell type
+
+cao.cell.ann <- read.csv("/marta_home/single-cellPUB/Cao_mouse_organogenesis/cell_annotate.csv")
+
+cao.pheno.sampled$celltype <- cao.cell.ann[match(cells2keep.cao, cao.cell.ann$sample), "Main_cell_type"]
+
+# Create seurat object
+
+cao <- CreateSeuratObject(counts = cao.count.sampled, meta.data = cao.pheno.sampled)
+  
+# Normalize
+cao <- NormalizeData(cao)
+cao <- FindVariableFeatures(cao, selection.method = "vst", nfeatures = 2000)
+
+# Plot UMAP
+cao <- ScaleData(cao)
+
+cao <- RunPCA(cao)
+cao <- RunUMAP(cao, dims = 1:30)
+plots <- DimPlot(cao, group.by = c("day", "extraction_date"), combine = FALSE, pt.size = 1)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 3, 
+    byrow = TRUE, override.aes = list(size = 3))))
+tiff("cao_day_date.tiff", width = 1200, height = 800)
+print(CombinePlots(plots))
+dev.off()
+
+tiff("cao_celltype.tiff", width = 1200, height = 800)
+DimPlot(cao, group.by = "celltype", pt.size = 0.5)
+dev.off()
+
+
+saveRDS(cao, file = "cao.rds")
+
+
+### calculate proportions before / after downsampling
+prop.celltype.df.cao <- as.data.frame(table(cao.cell.ann$Main_cell_type))
+colnames(prop.celltype.df.cao) <- c("celltype", "freq_before")
+prop.celltype.df.cao$proportion_before <- prop.celltype.df.cao$freq_before*100/sum(!is.na(cao.cell.ann$Main_cell_type))
+
+prop.celltype.cao.after <- as.data.frame(table(cao$celltype))
+colnames(prop.celltype.cao.after) <- c("celltype", "freq_after")
+prop.celltype.cao.after$proportion_after <- prop.celltype.cao.after$freq_after*100/ncol(cao)
+
+prop.celltype.df.cao <- merge(prop.celltype.df.cao, prop.celltype.cao.after, by = "celltype", all.x = T)
+
+prop.long <- gather(prop.celltype.df.cao, key = afterORbefore, value = proportion, c("proportion_before", "proportion_after"), factor_key = T)
+sum(prop.celltype.df.cao$proportion_before)
+
+tiff("Cao_proportions_bef_after.tiff", width = 1200, height = 600)
+ggplot(prop.long, aes(fill=afterORbefore, y=proportion, x=celltype)) + 
+    geom_bar(position="dodge", stat="identity") + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+```
+
+
+## Integrate Marioni + Cao
+
+```{r ceuwi}
+DefaultAssay(cao) <- "RNA"
+DefaultAssay(marioni.integrated) <- "RNA"
+
+embryo.int.list <- list(marioni = marioni.integrated, cao = cao)
+embryo.anchors <- FindIntegrationAnchors(object.list = embryo.int.list, dims = 1:30)
+
+features.intersection <- c(Reduce(intersect, lapply(embryo.anchors@object.list, rownames)))
+
+embryo.reference.integrated <- IntegrateData(anchorset = embryo.anchors, features.to.integrate = features.intersection)
+
+# Plot UMAP
+embryo.reference.integrated <- ScaleData(embryo.reference.integrated)
+
+embryo.reference.integrated <- RunPCA(embryo.reference.integrated)
+embryo.reference.integrated <- RunUMAP(embryo.reference.integrated, dims = 1:30)
+plots <- DimPlot(embryo.reference.integrated, group.by = c("stage", "day"), combine = FALSE, pt.size = 1)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 3, 
+    byrow = TRUE, override.aes = list(size = 3))))
+tiff("ref_embryo_stage.tiff", width = 1200, height = 800)
+print(CombinePlots(plots))
+dev.off()
+
+tiff("ref_embryo_celltype.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, group.by = "celltype", pt.size = 0.5, label = T, label.size = 4, repel = T) +
+   theme(legend.position = "none")
+dev.off()
+
+
+tiff("ref_embryo_trajectory.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, group.by = "Trajectory", pt.size = 0.5, label = T, label.size = 4, repel = T) +
+   theme(legend.position = "none")
+dev.off()
+
+
+
+### Clusters
+embryo.reference.integrated <- FindNeighbors(embryo.reference.integrated, reduction = "pca", dims = 1:30)
+embryo.reference.integrated <- FindClusters(embryo.reference.integrated, resolution = 1)
+
+tiff("ref_embryo_clusters.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, pt.size = 0.5, group.by = "integrated_snn_res.1", label = T, label.size = 6)
+dev.off()
+
+# Create a table with number of cells by celltype / cluster
+df <- data.frame(celltype = as.character(embryo.reference.integrated$celltype), 
+                 cluster = as.character(embryo.reference.integrated$integrated_snn_res.1), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYclusters.xlsx", row.names = F)
+
+## Try resolution = 1.2
+embryo.reference.integrated <- FindClusters(embryo.reference.integrated, resolution = 1.2)
+
+tiff("ref_embryo_clusters_1_2.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, pt.size = 0.5, group.by = "integrated_snn_res.1.2", label = T, label.size = 6)
+dev.off()
+
+# Create a table with number of cells by celltype / cluster
+df <- data.frame(celltype = as.character(embryo.reference.integrated$celltype), 
+                 cluster = as.character(embryo.reference.integrated$integrated_snn_res.1.2), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYclusters_1_2.xlsx", row.names = F)
+
+
+## Try resolution = 1.5
+
+embryo.reference.integrated <- FindClusters(embryo.reference.integrated, resolution = 1.5)
+
+tiff("ref_embryo_clusters_1_5.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, pt.size = 0.5, group.by = "integrated_snn_res.1.5", label = T, label.size = 6)
+dev.off()
+
+# Create a table with number of cells by celltype / cluster
+df <- data.frame(celltype = as.character(embryo.reference.integrated$celltype), 
+                 cluster = as.character(embryo.reference.integrated$integrated_snn_res.1.5), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(cluster, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, cluster~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYclusters_1_5.xlsx", row.names = F)
+
+
+# Create a table with number of cells by celltype / time point
+
+#Marioni
+df <- data.frame(celltype = as.character(embryo.reference.integrated$celltype), 
+                 stage = as.character(embryo.reference.integrated$stage), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(stage, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, stage~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYstage_Marioni.xlsx", row.names = F)
+
+#Cao
+df <- data.frame(celltype = as.character(embryo.reference.integrated$celltype), 
+                 stage = as.character(embryo.reference.integrated$day), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(stage, celltype) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, stage~celltype)
+WriteXLS(final, ExcelFileName = "cellNumber_celltypeBYstage_Cao.xlsx", row.names = F)
+
+
+## Plot celltypes separated for Marioni and Cao
+
+cells.marioni <- colnames(embryo.reference.integrated)[!is.na(embryo.reference.integrated$stage)]
+cells.cao <- colnames(embryo.reference.integrated)[!is.na(embryo.reference.integrated$day)]
+
+tiff("ref_embryo_celltype_Marioni.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, cells = cells.marioni, group.by = "celltype", pt.size = 0.5, label = T, label.size = 4, repel = T) + theme(legend.position = "none")
+dev.off()
+  
+tiff("ref_embryo_celltype_Cao.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, cells = cells.cao, group.by = "celltype", pt.size = 0.5, label = T, label.size = 4, repel = T) + theme(legend.position = "none")
+dev.off()
+  
+# rename celltypes that are overlapping
+embryo.reference.integrated$celltype_old <- embryo.reference.integrated$celltype
+celltypes.short <- as.character(embryo.reference.integrated$celltype)
+celltypes.short <- plyr::mapvalues(celltypes.short, from = c("Blood progenitors 1", "Blood progenitors 2", "Erythroid1", "Erythroid2", "Erythroid3", "Endothelial cells", "Intermediate Mesoderm", "Notochord cells", "Notochord", "Cardiac muscle lineages"), to = c("Blood progenitors", "Blood progenitors", "Erythroid", "Erythroid", "Erythroid", "Endothelium", "Intermediate mesoderm", "Notochord late", "Notochord early", "Cardiomyocytes"))
+embryo.reference.integrated$celltype <- factor(celltypes.short)
+
+
+
+saveRDS(embryo.reference.integrated, file = "embryo_ref_int.rds")
+```
+
+
+
+
+### Plot markers Natalia
+
+
+```{r cnuigew}
+DefaultAssay(embryo.reference.integrated) <- "RNA"
+mark.nat <- c("Vcam1", "Vim", "Fabp7", "Nes", "Hes5", "Sox11", "Sox2", "Eomes")
+
+for(gene in mark.nat){
+  tiff(paste0("./Natalia/Embryo_ref_", gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(embryo.reference.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+}
+
+tiff("Embryo_sox2_feat.tiff", width = 1200, height = 800)
+print(FeaturePlot(embryo.reference.integrated, features = "Sox2", pt.size = 1, order = T, cols = c("lightgrey", "black")))
+dev.off()
+
+tiff("Embryo_Dnd1_feat.tiff", width = 1200, height = 800)
+print(FeaturePlot(embryo.reference.integrated, features = "Dnd1", pt.size = 1, order = T, cols = c("lightgrey", "black")))
+dev.off()
+
+gene.moni <- c("En1", "Cldn10", "Fgf15", "Psme1", "Psmb8", "Ifitm3")
+for(gene in gene.moni){
+  tiff(paste0("./Moni_markers/Embryo_ref_", gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(embryo.reference.integrated, features = gene, pt.size = 1, order = T, cols = c("lightgrey", "black")))
+  dev.off()
+}
+  
+# Check sox2 expression in celltypes
+tiff("Sox2_celltypes.tiff", width = 1200, height = 800)
+VlnPlot(embryo.reference.integrated, features = "Sox2", group.by = "celltype") + theme(legend.position = 'none')
+dev.off()
+
+# Check DND1 expression in celltypes
+tiff("violin_Dnd1_celltypes.tiff", width = 1200, height = 800)
+VlnPlot(embryo.reference.integrated, features = "Dnd1", group.by = "celltype") + theme(legend.position = 'none')
+dev.off()
+
+gran.neu <- subset(embryo.reference.integrated, subset = celltype == "Granule neurons")
+
+table(gran.neu$day)
+
+cardiacmusc <- subset(embryo.reference.integrated, subset = celltype == "Cardiac muscle lineages")
+dim(cardiacmusc@assays$RNA)
+
+
+DimPlot(cardiacmusc, group.by = "day", pt.size = 0.5, label = T, label.size = 4, repel = T) + theme(legend.position = "none")
+
+embryo.reference.integrated$orig.ident[embryo.reference.integrated$orig.ident == "cell"] <- "marioni"
+embryo.reference.integrated$orig.ident[embryo.reference.integrated$orig.ident == "SeuratProject"] <- "cao"
+
+marioni.sub <- subset(embryo.reference.integrated, subset = orig.ident == "marioni")
+
+gene.moni <- c("En1", "Cldn10", "Fgf15", "Psme1", "Psmb8", "Ifitm3")
+for(gene in gene.moni){
+  tiff(paste0("./Moni_markers/Embryo_ref_Marioni", gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(marioni.sub, features = gene, pt.size = 1, order = T, cols = c("lightgrey", "black")))
+  dev.off()
+}
+
+
+```
+# Try to separate Forebrain from midHindbrain
+
+```{r cnfuig}
+fore.mid.hind <- subset(embryo.reference.integrated, subset = celltype == "Forebrain/Midbrain/Hindbrain")
+
+fore.markers <- c("Hesx1", "Six3", "Rax", "Pim2", "Lmo1")
+mid.hind.markers <- c("Ptn", "En1", "Hes3", "Fam181b", "Fgf15")
+
+for(gene in fore.markers){
+  tiff(paste0("./forebrain_markers/", gene, ".tiff"), width = 800, height = 700)
+  print(FeaturePlot(fore.mid.hind, features = gene, pt.size = 1, order = T))
+  dev.off()
+}
+for(gene in mid.hind.markers){
+  tiff(paste0("./midHindbrain_markers/", gene, ".tiff"), width = 800, height = 700)
+  print(FeaturePlot(fore.mid.hind, features = gene, pt.size = 1, order = T))
+  dev.off()
+}
+
+
+## Subcluster fore/mid/hind brain
+DefaultAssay(fore.mid.hind) <- "integrated"
+
+fore.mid.hind <- RunPCA(fore.mid.hind)
+fore.mid.hind <- FindNeighbors(fore.mid.hind, reduction = "pca", dims = 1:10)
+fore.mid.hind <- FindClusters(fore.mid.hind, resolution = 0.05)
+tiff("Fore_midHindbrain_subclustered.tiff", width = 800, height = 700)
+DimPlot(fore.mid.hind, pt.size = 1, group.by = "integrated_snn_res.0.05", label = T, label.size = 6)
+dev.off()
+
+
+cells.forebrain <- WhichCells(fore.mid.hind, idents = 1)
+cells.midhindbrain <- WhichCells(fore.mid.hind, idents = 0)
+
+# Rename celltypes in full dataset
+celltypes.all <- as.character(embryo.reference.integrated$celltype)
+celltypes.all[which(colnames(embryo.reference.integrated) %in% cells.forebrain)] <- "Forebrain"
+celltypes.all[which(colnames(embryo.reference.integrated) %in% cells.midhindbrain)] <- "Midbrain/Hindbrain"
+embryo.reference.integrated$celltype <- celltypes.all
+table(celltypes.all)
+
+
+tiff("ref_embryo_celltype_new.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, group.by = "celltype", pt.size = 0.5, label = T, label.size = 4, repel = T) +
+   theme(legend.position = "none")
+dev.off()
+
+tiff("ref_embryo_celltype_new_nolab.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, group.by = "celltype", pt.size = 0.5, label = F, label.size = 4, repel = T) +
+   theme(legend.position = "none")
+dev.off()
+tiff("ref_embryo_celltype_new_labnext.tiff", width = 1200, height = 800)
+DimPlot(embryo.reference.integrated, group.by = "celltype", pt.size = 0.5, label = F, label.size = 4, repel = T)
+dev.off()
+
+```
+
+# Try to locate PGCs in Cao et al. as subset of epithelial trajectories having high Tex14
+
+```{r vcnfsugisd}
+
+epithelial <- subset(embryo.reference.integrated, subset = celltype == "Epithelial cells")
+
+tiff("PGCs_Cao_Tex14.tiff", width = 800, height = 700)
+print(FeaturePlot(epithelial, features =  "Tex14", pt.size = 1.5, order = T))
+dev.off()
+
+
+
+
+
+
+```
+
+## Plot PGCs markers
+
+```{r cnduigds}
+pgc.hum <- read_xlsx("./PGC specific marker expression.xlsx", sheet=1)
+cat <- colnames(pgc.hum)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.hum[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(embryo.reference.integrated)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/human/", cat, "_",  gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(embryo.reference.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+  }
+}
+  
+
+pgc.mou <- read_xlsx("./PGC specific marker expression.xlsx", sheet=2)
+cat <- colnames(pgc.mou)
+for (cat in cat){
+  genes <- as.character(unlist(pgc.mou[, cat]))
+  genes <- genes[!is.na(genes)]
+  genes <- capitalize(tolower(genes))
+  genes <- genes[genes %in% rownames(embryo.reference.integrated)]
+  for(gene in genes){
+  tiff(paste0("./PGC_markers/mouse/", cat, "_",  gene, ".tiff"), width = 1200, height = 800)
+  print(FeaturePlot(embryo.reference.integrated, features = gene, pt.size = 1, order = T))
+  dev.off()
+  }
+}
+
+
+
+
+```
+
+## Saving embryo object to something compatible with scanpy
+
+```{r mi}
+
+embryo.seu <- as.SingleCellExperiment(embryo.reference.integrated, assay = "integrated")
+saveRDS(embryo.seu, file = "embryo_seurat.rds")
+
+
+```
+
+## Plot predictor genes
+
+```{r cnduig}
+## PGCs
+pgc.pred.genes <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/PGC_predictors.xlsx")
+
+plot_predictors <- function(pred.df, celltype, data){
+  pred.genes.pos <- as.character(unlist(pred.df[pred.df$coefficient >0, "predictors"]))
+  pred.genes.neg <- as.character(unlist(pred.df[pred.df$coefficient <0, "predictors"]))
+  
+  pred.genes.pos <- pred.genes.pos[pred.genes.pos %in% rownames(data)]
+  pred.genes.neg <- pred.genes.neg[pred.genes.neg %in% rownames(data)]
+  
+  for(mark in pred.genes.pos){
+    tiff(paste0("./predictors/", celltype, "/positive/", mark, "_feat.tiff"), width = 900, height = 700)
+    print(FeaturePlot(data, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+    dev.off()
+  }
+  
+  for(mark in pred.genes.neg){
+    tiff(paste0("./predictors/", celltype,"/negative/", mark, "_feat.tiff"), width = 900, height = 700)
+    print(FeaturePlot(data, features = mark, pt.size = 1, cols = c("gray", "blue"), order = T))
+    dev.off()
+  }
+}
+
+plot_predictors(pgc.pred.genes, "PGC", embryo.reference.integrated)
+
+## Midhindbrain
+midhind.pred.genes <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/MidHindbrain_predictors.xlsx")
+plot_predictors(midhind.pred.genes, "midhind", embryo.reference.integrated)
+```
+
+
+<!-- # Transfer labels -->
+
+<!-- ```{r vnfo} -->
+
+<!-- embryo.integrated <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/v2/embryos_integrated.rds") -->
+<!-- marioni.integrated <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v2/marioni_integrated.rds") -->
+
+<!-- DefaultAssay(embryo.integrated) <- "integrated" -->
+<!-- DefaultAssay(marioni.integrated) <- "integrated" -->
+
+<!-- embryo.anchors <- FindTransferAnchors(reference = marioni.integrated, query = embryo.integrated, -->
+<!--                                       dims = 1:30,  -->
+<!--                                       reference.assay = "integrated", query.assay = "integrated") -->
+<!-- predictions <- TransferData(anchorset = embryo.anchors, refdata = marioni.integrated$celltype,  -->
+<!--     dims = 1:30) -->
+<!-- embryo.integrated <- AddMetaData(embryo.integrated, metadata = predictions) -->
+
+<!-- tiff("embryo_integrated_celltype.tiff", width = 1200, height = 800) -->
+<!-- DimPlot(embryo.integrated, group.by = "predicted.id", pt.size = 0.5) -->
+<!-- dev.off() -->
+
+<!-- tiff("embryo_integrated_celltype_lab.tiff", width = 1200, height = 800) -->
+<!-- DimPlot(embryo.integrated, group.by = "predicted.id", pt.size = 0.5, label = T, label.size = 6) -->
+<!-- dev.off() -->
+
+<!-- saveRDS(embryo.integrated, file = "embryos_integrated_labels.rds") -->
+
+<!-- head(predictions) -->
+<!-- ``` -->
+
+<!-- ## Downsample marioni with geometric sketching -->
+
+<!-- ```{r cnduis} -->
+
+<!-- geosketch <- import("geosketch") -->
+<!-- X <- GetAssayData(object = marioni.integrated, slot = "data", assay = "RNA")  -->
+<!-- dim(X) -->
+<!-- # transpose matrix to have cells in rows, features in columns -->
+<!-- X <- t(as(X, "dgTMatrix")) -->
+<!-- dim(X) -->
+
+<!-- # Get top PCs from randomized SVD -->
+<!-- s <- rsvd(X, k = 30) -->
+<!-- X.pcs <- s$u %*% diag(s$d) -->
+
+<!-- sketch.size <- round(0.5 * nrow(X)) -->
+<!-- sketch.indices <- geosketch$gs(X.pcs, as.integer(sketch.size), seed = as.integer(234)) -->
+
+<!-- cells.sketch.integrated <- colnames(marioni.integrated)[unlist(sketch.indices)] -->
+
+<!-- marioni.sketch.int <- marioni.integrated[, cells.sketch.integrated] -->
+
+<!-- tiff("sketch_marioni_integrated_celltype.tiff", width = 1200, height = 800) -->
+<!-- DimPlot(marioni.sketch.int, group.by = "celltype", pt.size = 0.5, label = T, label.size = 6) -->
+<!-- dev.off() -->
+
+
+<!-- marioni.sampled <- marioni.integrated[, sample(Cells(marioni.integrated), 50000)] -->
+
+<!-- tiff("sampled_marioni_celltype.tiff", width = 1200, height = 800) -->
+<!-- DimPlot(marioni.sampled, group.by = "celltype", pt.size = 0.5, label = T, label.size = 6) -->
+<!-- dev.off() -->
+
+<!-- ``` -->

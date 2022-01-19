@@ -1,0 +1,75 @@
+---
+title: "Volcano plot DE SHHvsMYC COO paper"
+author: "Marta Interlandi"
+date: "4/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Volcano Plot for DE SHH vs MYC
+
+```{r vnrguirglr}
+library(ggrepel)
+
+#de_list <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/DE_TUM_SHHvsMYC.xlsx")
+de_list <- read_excel("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/COO_revision_DEtumSHHvstumMYCIC_sc_label.xlsx")
+colnames(de_list)[1] <- "gene_name"
+
+
+
+de_list$label <- ifelse(is.na(de_list$label), "", de_list$label)
+
+
+# Color scheme
+de_list$color <- "background"
+de_list$color[de_list$avg_logFC > 0 & de_list$label != ""] <- "SHH"
+de_list$color[de_list$avg_logFC < 0 & de_list$label != ""] <- "MYC"
+
+# Convert pvalues=0 to a random -log10(p) between max() and max + 20
+de_list$log10p <- -log10(de_list$p_val_adj)
+if(any(is.infinite(de_list$log10p))){
+  max_log10 <- max(de_list$log10p[!is.infinite(de_list$log10p)])
+  set.seed(1234)
+  de_list$log10p[is.infinite(de_list$log10p)] <- sample(seq(from = max_log10,
+                                                  to = max_log10+50,
+                                                  by = 0.1
+                                                  ), size = sum(is.infinite(de_list$log10p)), replace = T)
+
+}
+
+# Separate plot in left and right
+de_list$position <- "UP-regulated MYC "
+de_list$position[de_list$avg_logFC > 0] <- "UP-regulated SHH"
+
+
+# Plot
+g <- ggplot(de_list, aes(x = avg_logFC, y = log10p)) +
+  geom_point(data = subset(de_list, label == ""), aes(size = 1, colour = color)) +
+  geom_point(data = subset(de_list, label != ""), aes(size = 1, colour = color)) +
+  #geom_text_repel(aes(label = label), size = 4.5) +
+  
+  scale_color_manual(values = c("background" = alpha("gray80", 0.6), "SHH" = "#274393", "MYC" = "#1D6E30")) +
+  #facet_grid(cols = vars(position)) +
+  xlim(-ceiling(max(abs(de_list$avg_logFC))), ceiling(max(abs(de_list$avg_logFC)))) +
+  xlab("Average log2 fold change") + 
+  ylab("-log10 adjusted p-value") +
+  theme_bw() +
+  theme(legend.position = "none",
+      text = element_text(size = 20)) 
+
+
+
+
+
+tiff("./volcano_DE_SHHvsMYC_tum_nofacet_rev2.tiff", width = 600, height = 500)
+plot(g)
+dev.off()
+tiff("./volcano_DE_SHHvsMYC_tum_nofacet_nolab_rev2.tiff", width = 600, height = 500)
+plot(g)
+dev.off()
+
+```

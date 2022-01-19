@@ -1,0 +1,1030 @@
+---
+title: "COO - binomial LR from Young et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(gelnet)
+library(dplyr)
+library(biomaRt)
+library(Seurat)
+library(pheatmap)
+library(Hmisc)
+library(glmnet)
+library(ggplot2)
+library(cowplot)
+library(foreach)
+library(doMC)
+library(WriteXLS)
+library(plyr)
+
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR")
+
+load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-logisticReg/binomialLR/workspace.RData")
+
+```
+
+# Collect genes to exclude from the model construction
+
+```{r vrnbigobn}
+
+## Exclude specific genes from the model construction
+ensembl <- useMart("ensembl", dataset="mmusculus_gene_ensembl")
+
+# Get mouse genes associated to mitochondrion and child terms
+mito.genes.go <- getBM(attributes=c('mgi_symbol'),
+                   filters = 'go', values = 'GO:0005739', mart = ensembl)
+
+# Ribosome 
+ribo.genes.go <- getBM(attributes=c('mgi_symbol'),
+                   filters = 'go', values = 'GO:0005840', mart = ensembl)
+
+# Cell cycle 
+cellcycle.genes.go <- getBM(attributes=c('mgi_symbol'),
+                   filters = 'go', values = 'GO:0007049', mart = ensembl)
+
+go.genes2exclude <- unique(c(mito.genes.go$mgi_symbol, ribo.genes.go$mgi_symbol, cellcycle.genes.go$mgi_symbol))
+
+
+
+
+```
+
+# Read embryo reference dataset
+
+```{r vfopbde}
+embryo_ref <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/embryo_ref_int.rds")
+DefaultAssay(embryo_ref) <- "RNA"
+
+celltypes.short <- as.character(embryo_ref$celltype)
+celltypes.short <- plyr::mapvalues(celltypes.short, from = c("Blood progenitors 1", "Blood progenitors 2", "Erythroid1", "Erythroid2", "Erythroid3", "Endothelial cells", "Intermediate Mesoderm", "Notochord cells", "Notochord", "Cardiac muscle lineages"), to = c("Blood progenitors", "Blood progenitors", "Erythroid", "Erythroid", "Erythroid", "Endothelium", "Intermediate mesoderm", "Notochord late", "Notochord early", "Cardiomyocytes"))
+embryo_ref$celltype.short <- factor(celltypes.short)
+celltypes <- sort(unique(embryo_ref$celltype.short))
+
+table(embryo_ref$celltype.short)
+# Excluding lens
+embryo_ref <- subset(embryo_ref, subset = celltype.short != "Lens")
+
+embryo_ref$celltype.short <- factor(as.character(embryo_ref$celltype.short))
+
+table(embryo_ref$celltype.short)
+
+embryo <- embryo_ref[!(rownames(embryo_ref) %in% go.genes2exclude),]
+embryo_mat <- GetAssayData(embryo, slot = "data", assay = "RNA")
+dim(embryo_mat)
+# keeping genes that are expressed in at least 100 cells
+e <- CreateSeuratObject(embryo_mat, min.cells = 100)
+
+embryo_mat <- GetAssayData(e, slot = "data", assay = "RNA")
+dim(embryo_mat)
+```
+# Getting matrix for CIBERSORT
+
+```{r fvnrugi}
+# count matrix
+ref_counts <- GetAssayData(embryo, slot = "counts", assay = "RNA")
+max(ref_counts)
+
+# keep only those genes that were previously selected
+genes2keep <- rownames(e)
+
+ref_counts <- ref_counts[genes2keep,]
+colnames(ref_counts) <- embryo$celltype.short
+colnames(ref_counts)[1:5]
+dim(ref_counts)
+
+table(colnames(ref_counts))
+unique(colnames(ref_counts))
+
+# Try 1: random downsampling to 10,000 cells
+set.seed(1234)
+ref_downsampled <- ref_counts[, sample(colnames(ref_counts), size = 10000, replace = F)]
+dim(ref_downsampled)
+table(colnames(ref_downsampled))
+unique(colnames(ref_downsampled))
+
+ref_down_mat <- as.matrix(ref_downsampled)
+ref_down_mat <- cbind("gene_symbol" = rownames(ref_down_mat), ref_down_mat)
+
+ref_down_mat[1:5,1:5]
+
+write.table(ref_down_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/embryo_ref.txt",
+            quote = FALSE, sep = "\t", row.names = F, col.names = T)
+
+# Try 2: cherry-picking 10 celltypes from MYCIC LR results (5 top/bottom)
+ct2keep <- c("PGC", "Surface ectoderm", "ExE ectoderm", "Connective tissue progenitors", "Intermediate mesoderm", "Primitive erythroid lineage", "NMP", "Forebrain", "Erythroid", "Cholinergic neurons")
+
+ref_cherry <- ref_counts[, colnames(ref_counts) %in% ct2keep]
+dim(ref_cherry)
+table(colnames(ref_cherry))
+ref_cherry_mat <- as.matrix(ref_cherry)
+ref_cherry_mat <- cbind("gene_symbol" = rownames(ref_cherry_mat), ref_cherry_mat)
+
+ref_cherry_mat[1:5,1:5]
+
+write.table(ref_cherry_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/embryo_ref_cherry.txt",
+            quote = FALSE, sep = "\t", row.names = F, col.names = T)
+
+# Try 3: cherry-picking celltypes that are biologically meaningful + top scorers for MYC IC
+ct2keep <- c("PGC", "Surface ectoderm", "ExE ectoderm", "Connective tissue progenitors", "Intermediate mesoderm", "Forebrain", "Neural Tube", "Neural crest", "Schwann cell precursor", "Radial glia", "Midbrain/Hindbrain", "Neural progenitor cells", "Spinal cord")
+
+ref_cherry <- ref_counts[, colnames(ref_counts) %in% ct2keep]
+dim(ref_cherry)
+table(colnames(ref_cherry))
+ref_cherry_mat <- as.matrix(ref_cherry)
+ref_cherry_mat <- cbind("gene_symbol" = rownames(ref_cherry_mat), ref_cherry_mat)
+
+ref_cherry_mat[1:5,1:5]
+
+write.table(ref_cherry_mat, file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/embryo_ref_cherry_bio.txt",
+            quote = FALSE, sep = "\t", row.names = F, col.names = T)
+
+ciber.exam <- read.table("/marta_home/scRNAseq_Ranalysis/Seurat_v3/COO-cibersort/scRNA-Seq_reference_melanoma_Tirosh_Fig2b-d.txt", sep = "\t", col.names = T)
+unique(as.character(unlist(ciber.exam[1,])))
+```
+
+
+## Logistic regression from Young et al. https://github.com/constantAmateur/scKidneyTumors
+
+```{r vmfiobgdhfd}
+getPopulationOffset = function(y){
+  if(!is.factor(y))
+    y=factor(y)
+  if(length(levels(y))!=2)
+    stop("y must be a two-level factor")
+  off = sum(y==levels(y)[2])/length(y)
+  off = log(off/(1-off))
+  return(rep(off,length(y)))
+}
+
+
+#' Do the OvR fit for every variable.  This just does a simple CV (cross-validation) selection of regularisation amount.  Far from ideal, but should be good enough for the main conclusions.
+multinomialFitCV = function(x,y,nParallel=1,...){
+  fits = list()
+  if(nParallel>1)
+    registerDoMC(cores=nParallel)
+  #Do them in order of size
+  marks = names(sort(table(as.character(y))))
+  for(mark in marks){
+    message(sprintf("Fitting model for variable %s",mark))
+    fac = factor(y==mark)
+    #The two main modes of failure are too few positives and errors constructing lambda.  These should be handled semi-gracefully
+    fits[[mark]] = tryCatch(
+      cv.glmnet(x,fac,offset=getPopulationOffset(fac),family='binomial',intercept=FALSE,alpha=0.8,nfolds=10,type.measure='class',parallel=nParallel>1,...),
+      error = function(e) {
+        tryCatch(
+          cv.glmnet(x,fac,offset=getPopulationOffset(fac),family='binomial',intercept=FALSE,alpha=0.8,nfolds=10,type.measure='class',parallel=nParallel>1,lambda=exp(seq(-10,-3,length.out=100)),...),
+          error = function(e) {
+            warning(sprintf("Could not fit model for variable %s",mark))
+            return(NULL)
+          })
+      })
+  }
+  return(fits)
+}
+
+
+# Training data (embryo cells)
+trainDat <- t(embryo_mat)
+dim(trainDat)
+
+classes <- as.factor(embryo$celltype.short)
+
+
+fitEmbryo <- multinomialFitCV(trainDat, classes, nParallel=40)
+
+saveRDS(fitEmbryo, file = "lr_embryo_0602.rds")
+
+
+```
+
+
+## Prediction
+##### SHH
+
+
+```{r exc}
+# get genes that are part of the glm model
+glm.genes <- rownames(fitEmbryo[[1]]$glmnet.fit$beta)
+
+# Tumor: SHH IC
+tum_shh <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_SHH/shh_tumor_cells.rds")
+
+tum_shh_mat <- GetAssayData(tum_shh, slot = "data", assay = "RNA")
+dim(tum_shh_mat)
+
+add_missing_genes <- function(tum_mat, glm.genes){
+  # add missing genes to tumor matrix (with 0 expression)
+  # return test data
+  genes.missing <- glm.genes[!(glm.genes %in% rownames(tum_mat))]
+  zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(tum_mat))
+  rownames(zero_mat) <- genes.missing
+  colnames(zero_mat) <- colnames(tum_mat)
+  tum_shh_mat_expanded <- rbind(tum_mat, zero_mat)
+  testDat <- t(tum_shh_mat_expanded[glm.genes,]) 
+  return(testDat)
+}
+
+testDat <- add_missing_genes(tum_shh_mat, glm.genes)
+dim(testDat)
+
+#Predict on tumor data
+preds.shh = list()
+for(ct in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", ct))
+  preds.shh[[ct]] = predict(fitEmbryo[[ct]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+# preds.shh.se = list()
+# for(ct in levels(classes)){
+#   message(sprintf("Predicting probabilities for cluster %s", ct))
+#   preds.shh.se[[ct]] = predict(fitEmbryo[[ct]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+#                               type = "response", se.fit = TRUE)
+# }
+
+# Calculate mean probability for each cluster
+prob_mean <- as.matrix(sort(unlist(lapply(preds.shh, mean))))
+rownames(prob_mean)
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "SHH_IC_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.shh), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_shh)
+annotation <- data.frame(cluster = tum_shh$integrated_snn_res.0.5, row.names = colnames(tum_shh))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "SHH_IC_LogReg_probability_allcells.tiff")
+
+saveRDS(preds.shh, file = "SHH_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "SHH_IC_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "SHH_IC_LogReg_probability_allcells_nofail.tiff")
+
+##Heatmap all cells ordered by cluster
+rownames(prob.mat.nofail)
+clusters <- as.character(tum_shh$integrated_snn_res.0.5)
+names(clusters) <- colnames(tum_shh)
+clusters <- clusters[order(clusters)]
+
+prob.mat.nofail.ord <- t(prob.mat.nofail[names(clusters),])
+# order celltypes by avg probability ascending order
+prob.mat.nofail.ord <- prob.mat.nofail.ord[rownames(prob_mean_nofail),]
+
+pheatmap(prob.mat.nofail.ord, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "SHH_IC_LogReg_probability_allcells_nofailBYCLUST.tiff")
+
+## aggregate cluster by computing average
+heat_mat <- prob.mat.nofail.ord
+mat <- as.data.frame(t(heat_mat))
+
+mat$cluster <- clusters
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(annotation= mean.mat$cluster, row.names = rownames(mean.mat))
+
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation_col, filename = "SHH_IC_LogReg_probability_allcells_nofailBYCLUSTmean.tiff")
+
+
+# Coefficients for mid/hindbrain
+midhind.coef <- as.matrix(coef(fitEmbryo[["Midbrain/Hindbrain"]]))
+dim(midhind.coef)
+midhind.predictors <- rownames(midhind.coef)[midhind.coef != 0]
+midhind.coef.df <- data.frame(predictors = midhind.predictors, coefficient = midhind.coef[midhind.coef != 0])
+WriteXLS(midhind.coef.df, ExcelFileName = "MidHindbrain_predictors.xlsx", row.names = F)
+
+saveRDS(midhind.predictors, "midhind_predictors_genes.rds")
+
+
+```
+
+##### MYC IC
+
+
+```{r exc}
+# get genes that are part of the glm model
+glm.genes <- rownames(fitEmbryo[[1]]$glmnet.fit$beta)
+
+tum_myc_ic <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_tumor_cells.rds")
+
+myc_ic_mat <- GetAssayData(tum_myc_ic, slot = "data", assay = "RNA")
+dim(myc_ic_mat)
+testDat <- add_missing_genes(myc_ic_mat, glm.genes)
+
+#Predict on tumor data
+preds.myc.ic = list()
+for(ct in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", ct))
+  preds.myc.ic[[ct]] = predict(fitEmbryo[[ct]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.ic, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.ic), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_myc_ic)
+annotation <- data.frame(cluster = tum_myc_ic$new_clustering, row.names = colnames(tum_myc_ic))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_LogReg_probability_allcells.tiff")
+
+
+saveRDS(preds.myc.ic, file = "MYC_IC_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "MYC_IC_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_LogReg_probability_allcells_nofail.tiff")
+
+##Heatmap all cells ordered by cluster
+rownames(prob.mat.nofail)
+clusters <- as.character(tum_myc_ic$new_clustering)
+names(clusters) <- colnames(tum_myc_ic)
+clusters <- clusters[order(clusters)]
+
+prob.mat.nofail.ord <- t(prob.mat.nofail[names(clusters),])
+# order celltypes by avg probability ascending order
+prob.mat.nofail.ord <- prob.mat.nofail.ord[rownames(prob_mean_nofail),]
+
+pheatmap(prob.mat.nofail.ord, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_LogReg_probability_allcells_nofailBYCLUST.tiff")
+
+## aggregate cluster by computing average
+heat_mat <- prob.mat.nofail.ord
+mat <- as.data.frame(t(heat_mat))
+
+mat$cluster <- clusters
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(annotation= mean.mat$cluster, row.names = rownames(mean.mat))
+
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation_col, filename = "MYC_IC_LogReg_probability_allcells_nofailBYCLUSTmean.tiff")
+
+
+
+########## excluding intermediate clusters 5 and 11
+# upper tumor cluster
+cells <- colnames(tum_myc_ic)[tum_myc_ic$new_clustering %in% c(0,3,23)]
+myc_up <- tum_myc_ic[, cells]
+
+# lower tumor cluster
+cells <- colnames(tum_myc_ic)[tum_myc_ic$new_clustering %in% c(2,4,14,7)]
+myc_down <- tum_myc_ic[, cells]
+
+
+
+myc_up_mat <- GetAssayData(myc_up, slot = "data", assay = "RNA")
+myc_down_mat <- GetAssayData(myc_down, slot = "data", assay = "RNA")
+
+testDat <- add_missing_genes(myc_up_mat, glm.genes)
+dim(testDat)
+
+
+#Predict on tumor data
+preds.myc.up = list()
+for(ct in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", ct))
+  preds.myc.up[[ct]] = predict(fitEmbryo[[ct]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.up, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_UP_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.up), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(myc_up)
+annotation <- data.frame(cluster = myc_up$new_clustering, row.names = colnames(myc_up))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_UP_LogReg_probability_allcells.tiff")
+
+
+saveRDS(preds.myc.up, file = "MYC_IC_UP_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "MYC_IC_UP_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_UP_LogReg_probability_allcells_nofail.tiff")
+
+
+# Coefficients for PGC
+pgc.coef <- as.matrix(coef(fitEmbryo[["PGC"]]))
+dim(pgc.coef)
+pgc.predictors <- rownames(pgc.coef)[pgc.coef != 0]
+pgc.coef.df <- data.frame(predictors = pgc.predictors, coefficient = pgc.coef[pgc.coef != 0])
+WriteXLS(pgc.coef.df, ExcelFileName = "PGC_predictors.xlsx", row.names = F)
+
+saveRDS(pgc.predictors, "PGC_predictors_genes.rds")
+
+# Coefficients for Surface ectoderm
+coef <- as.matrix(coef(fitEmbryo[["Surface ectoderm"]]))
+predictors <- rownames(coef)[coef != 0]
+coef.df <- data.frame(predictors = predictors, coefficient = coef[coef != 0])
+WriteXLS(coef.df, ExcelFileName = "Surface_ecto_predictors.xlsx", row.names = F)
+
+saveRDS(predictors, "Surface_ectoderm_predictors_genes.rds")
+
+################## MYC DOWN
+testDat <- add_missing_genes(myc_down_mat, glm.genes)
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.down = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.down[[mark]] = predict(fitEmbryo[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.down, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_DOWN_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.down), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(myc_down)
+annotation <- data.frame(cluster = myc_down$new_clustering, row.names = colnames(myc_down))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, filename = "MYC_IC_DOWN_LogReg_probability_allcells.tiff")
+
+
+saveRDS(preds.myc.down, file = "MYC_IC_DOWN_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "MYC_IC_DOWN_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_IC_DOWN_LogReg_probability_allcells_nofail.tiff")
+
+
+
+```
+
+##### MYC EC
+
+
+```{r exc}
+# get genes that are part of the glm model
+glm.genes <- rownames(fitEmbryo[[1]]$glmnet.fit$beta)
+
+tum_myc_ec <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+tum_myc_ec_mat <- GetAssayData(tum_myc_ec, slot = "data", assay = "RNA")
+
+testDat <- add_missing_genes(tum_myc_ec_mat, glm.genes)
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.ec = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.ec[[mark]] = predict(fitEmbryo[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.ec, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_EC_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.ec), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_myc_ec)
+
+annotation <- data.frame(cluster = tum_myc_ec$new_clustering, row.names = colnames(tum_myc_ec))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation,  filename = "MYC_EC_LogReg_probability_allcells.tiff")
+
+
+saveRDS(preds.myc.ec, file = "MYC_EC_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "MYC_EC_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_EC_LogReg_probability_allcells_nofail.tiff")
+
+
+
+##Heatmap all cells ordered by cluster
+rownames(prob.mat.nofail)
+clusters <- as.character(tum_myc_ec$new_clustering)
+names(clusters) <- colnames(tum_myc_ec)
+clusters <- clusters[order(clusters)]
+
+prob.mat.nofail.ord <- t(prob.mat.nofail[names(clusters),])
+# order celltypes by avg probability ascending order
+prob.mat.nofail.ord <- prob.mat.nofail.ord[rownames(prob_mean_nofail),]
+
+pheatmap(prob.mat.nofail.ord, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_EC_LogReg_probability_allcells_nofailBYCLUST.tiff")
+
+
+# Adding info on Sox2/Rosa-cre models
+model <- as.character(tum_myc_ec$sample)
+table(model)
+model <- mapvalues(model, from = c("ros1148", "sox568", "sox593"), to = c("Rosa26-cre", "Sox2-cre", "Sox2-cre"))
+names(model) <- colnames(tum_myc_ec)
+
+annotation_model <- annotation
+annotation_model$model <- model
+
+pheatmap(prob.mat.nofail.ord, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation_model, filename = "MYC_EC_LogReg_probability_allcells_nofailBYCLUST_model.tiff")
+
+
+## aggregate cluster by computing average
+heat_mat <- prob.mat.nofail.ord
+mat <- as.data.frame(t(heat_mat))
+
+mat$cluster <- clusters
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(annotation= mean.mat$cluster, row.names = rownames(mean.mat))
+
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation_col, filename = "MYC_EC_LogReg_probability_allcells_nofailBYCLUSTmean.tiff")
+
+
+
+# Coefficients for Connective tissue progenitors
+coef <- as.matrix(coef(fitEmbryo[["Connective tissue progenitors"]]))
+predictors <- rownames(coef)[coef != 0]
+coef.df <- data.frame(predictors = predictors, coefficient = coef[coef != 0])
+WriteXLS(coef.df, ExcelFileName = "Connective_tis_prog_predictors.xlsx", row.names = F)
+
+saveRDS(predictors, "Connective_tis_prog_predictors_genes.rds")
+
+
+
+```
+
+
+##### Spinal
+
+
+```{r exc}
+# get genes that are part of the glm model
+glm.genes <- rownames(fitEmbryo[[1]]$glmnet.fit$beta)
+
+tum_spinal <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+tum_spinal_mat <- GetAssayData(tum_spinal, slot = "data", assay = "RNA")
+
+testDat <- add_missing_genes(tum_spinal_mat, glm.genes)
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.sp = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.sp[[mark]] = predict(fitEmbryo[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.sp, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_SPIN_LogReg_probability.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.sp), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_spinal)
+
+annotation <- data.frame(cluster = tum_spinal$new_clustering, row.names = colnames(tum_spinal))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation,  filename = "MYC_SPIN_LogReg_probability_allcells.tiff")
+
+
+saveRDS(preds.myc.sp, file = "MYC_SPIN_preds.rds")
+
+## Remove ct for which the model fails
+prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+pheatmap(prob_mean_nofail, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, show_rownames = T, filename = "MYC_SPIN_LogReg_probability_nofail.tiff")
+
+prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+pheatmap(t(prob.mat.nofail), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_SPIN_LogReg_probability_allcells_nofail.tiff")
+
+##Heatmap all cells ordered by cluster
+rownames(prob.mat.nofail)
+clusters <- as.character(tum_spinal$new_clustering)
+names(clusters) <- colnames(tum_spinal)
+clusters <- clusters[order(clusters)]
+
+prob.mat.nofail.ord <- t(prob.mat.nofail[names(clusters),])
+# order celltypes by avg probability ascending order
+prob.mat.nofail.ord <- prob.mat.nofail.ord[rownames(prob_mean_nofail),]
+
+pheatmap(prob.mat.nofail.ord, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation, filename = "MYC_SPIN_LogReg_probability_allcells_nofailBYCLUST.tiff")
+
+## aggregate cluster by computing average
+heat_mat <- prob.mat.nofail.ord
+mat <- as.data.frame(t(heat_mat))
+
+mat$cluster <- clusters
+
+mean.mat <- aggregate(. ~ cluster, mat, mean)
+rownames(mean.mat) <- mean.mat$cluster
+
+annotation_col <- data.frame(annotation= mean.mat$cluster, row.names = rownames(mean.mat))
+
+
+mean.mat <- mean.mat[,-1]
+mean.mat <- t(as.matrix(mean.mat))
+
+pheatmap(mean.mat, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation_col, filename = "MYC_SPIN_LogReg_probability_allcells_nofailBYCLUSTmean.tiff")
+
+
+# Coefficients for ExE ectoderm
+coef <- as.matrix(coef(fitEmbryo[["ExE ectoderm"]]))
+predictors <- rownames(coef)[coef != 0]
+coef.df <- data.frame(predictors = predictors, coefficient = coef[coef != 0])
+WriteXLS(coef.df, ExcelFileName = "ExE_ectoderm_predictors.xlsx", row.names = F)
+
+saveRDS(predictors, "ExE_ectoderm_predictors_genes.rds")
+```
+
+
+## Reducing complexity for training data
+
+
+```{r dsiog}
+# Excluding lens
+embryo_ref_red <- subset(embryo_ref, subset = celltype.short != "Exe ectoderm")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Exe endoderm")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Exe mesoderm")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Primitive erythroid lineage")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Definitive erythroid lineage")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Blood progenitors")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "White blood cells")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Erythroid")
+embryo_ref_red <- subset(embryo_ref_red, subset = celltype.short != "Megakaryocytes")
+
+
+embryo_ref_red$celltype.short <- factor(as.character(embryo_ref_red$celltype.short))
+
+table(embryo_ref_red$celltype.short)
+
+embryo_red <- embryo_ref_red[!(rownames(embryo_ref_red) %in% go.genes2exclude),]
+embryo_mat_red <- GetAssayData(embryo_red, slot = "data", assay = "RNA")
+dim(embryo_mat_red)
+# keeping genes that are expressed in at least 1000 cells
+e <- CreateSeuratObject(embryo_mat_red, min.cells = 1000)
+
+embryo_mat_red <- GetAssayData(e, slot = "data", assay = "RNA")
+dim(embryo_mat_red)
+
+
+
+# Training data (embryo cells)
+trainDat <- t(embryo_mat_red)
+dim(trainDat)
+
+classes <- as.factor(embryo_red$celltype.short)
+
+
+fitEmbryo_red <- multinomialFitCV(trainDat, classes, nParallel=40)
+
+saveRDS(fitEmbryo_red, file = "lr_embryo_red.rds")
+
+
+
+```
+
+### Prediction for reduced embryo model
+
+
+##### SHH
+
+
+```{r exc}
+# get genes that are part of the glm model
+glm.genes.red <- rownames(fitEmbryo_red[[1]]$glmnet.fit$beta)
+
+# add missing genes to tumor matrix (with 0 expression)
+genes.missing <- glm.genes.red[!(glm.genes.red %in% rownames(tum_shh_mat))]
+zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(tum_shh_mat))
+rownames(zero_mat) <- genes.missing
+colnames(zero_mat) <- colnames(tum_shh_mat)
+tum_shh_mat_expanded <- rbind(tum_shh_mat, zero_mat)
+
+testDat <- t(tum_shh_mat_expanded[glm.genes.red,])
+dim(testDat)
+
+#Predict on tumor data
+preds.shh.red.min = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.shh.red.min[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.min', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.shh.red.min, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "SHH_IC_LogReg_probability_reduced_min.tiff")
+
+prob.mat <- matrix(unlist(preds.shh.red.min), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, filename = "SHH_IC_LogReg_probability_allcells_reduced_min.tiff")
+
+summary(preds.shh[["Cardiomyocytes"]])
+summary(preds.shh[["Notochord early"]])
+summary(preds.shh[["Parietal endoderm"]])
+summary(preds.shh.red.min[["Melanocytes"]])
+
+saveRDS(preds.shh.red, file = "SHH_preds_red.rds")
+
+
+```
+
+##### MYC IC
+
+
+```{r exc}
+
+# add missing genes to tumor matrix (with 0 expression)
+genes.missing <- glm.genes.red[!(glm.genes.red %in% rownames(myc_up_mat))]
+zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(myc_up_mat))
+rownames(zero_mat) <- genes.missing
+colnames(zero_mat) <- colnames(myc_up_mat)
+myc_up_mat_expanded <- rbind(myc_up_mat, zero_mat)
+
+testDat <- t(myc_up_mat_expanded[glm.genes.red,])
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.up.red = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.up.red[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+#Predict on tumour data
+preds.myc.up.red.min = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.up.red.min[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.min', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.up.red, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_UP_LogReg_probability_red.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.up.red), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, filename = "MYC_IC_UP_LogReg_probability_allcells_red.tiff")
+
+
+saveRDS(preds.myc.up.red, file = "MYC_IC_UP_preds_red.rds")
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.up.red.min, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_UP_LogReg_probability_red_min.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.up.red.min), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, filename = "MYC_IC_UP_LogReg_probability_allcells_red_min.tiff")
+
+
+saveRDS(preds.myc.up.red.min, file = "MYC_IC_UP_preds_red_min.rds")
+
+
+# add missing genes to tumor matrix (with 0 expression)
+genes.missing <- glm.genes.red[!(glm.genes.red %in% rownames(myc_down_mat))]
+zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(myc_down_mat))
+rownames(zero_mat) <- genes.missing
+colnames(zero_mat) <- colnames(myc_down_mat)
+myc_down_mat_expanded <- rbind(myc_down_mat, zero_mat)
+
+testDat <- t(myc_down_mat_expanded[glm.genes.red,])
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.down.red = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.down.red[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.down.red, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_IC_DOWN_LogReg_probability_red.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.down.red), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, filename = "MYC_IC_DOWN_LogReg_probability_allcells_red.tiff")
+
+
+saveRDS(preds.myc.down.red, file = "MYC_IC_DOWN_preds_red.rds")
+
+
+
+```
+
+##### MYC EC
+
+
+```{r exc}
+
+# add missing genes to tumor matrix (with 0 expression)
+genes.missing <- glm.genes.red[!(glm.genes.red %in% rownames(tum_myc_ec_mat))]
+zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(tum_myc_ec_mat))
+rownames(zero_mat) <- genes.missing
+colnames(zero_mat) <- colnames(tum_myc_ec_mat)
+myc_ec_mat_expanded <- rbind(tum_myc_ec_mat, zero_mat)
+
+testDat <- t(myc_ec_mat_expanded[glm.genes.red,])
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.ec.red = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.ec.red[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.ec.red, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_EC_LogReg_probability_red.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.ec.red), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_myc_ec)
+
+annotation <- data.frame(cluster = tum_myc_ec$new_clustering, row.names = colnames(tum_myc_ec))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation,  filename = "MYC_EC_LogReg_probability_allcells_red.tiff")
+
+
+saveRDS(preds.myc.ec.red, file = "MYC_EC_preds_red.rds")
+```
+
+
+##### Spinal
+
+
+```{r exc}
+# add missing genes to tumor matrix (with 0 expression)
+genes.missing <- glm.genes.red[!(glm.genes.red %in% rownames(tum_spinal_mat))]
+zero_mat <- matrix(0, nrow = length(genes.missing), ncol = ncol(tum_spinal_mat))
+rownames(zero_mat) <- genes.missing
+colnames(zero_mat) <- colnames(tum_spinal_mat)
+myc_spinal_mat_expanded <- rbind(tum_spinal_mat, zero_mat)
+
+testDat <- t(myc_spinal_mat_expanded[glm.genes.red,])
+dim(testDat)
+
+#Predict on tumour data
+preds.myc.sp.red = list()
+for(mark in levels(classes)){
+  message(sprintf("Predicting probabilities for cluster %s", mark))
+  preds.myc.sp.red[[mark]] = predict(fitEmbryo_red[[mark]], newx = testDat, s = 'lambda.1se', newoffset = rep(0,nrow(testDat)), 
+                              type = "response")
+}
+
+
+
+prob_mean <- as.matrix(sort(unlist(lapply(preds.myc.sp.red, mean))))
+
+pheatmap(prob_mean, cluster_rows = F, cluster_cols = F, cellwidth = 10, cellheight = 10, filename = "MYC_SPIN_LogReg_probability_red.tiff")
+
+prob.mat <- matrix(unlist(preds.myc.sp.red), ncol = length(levels(classes)), byrow = F)
+colnames(prob.mat) <- levels(classes)
+rownames(prob.mat) <- colnames(tum_spinal)
+
+annotation <- data.frame(cluster = tum_spinal$new_clustering, row.names = colnames(tum_spinal))
+
+pheatmap(t(prob.mat), cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = F, annotation_col = annotation,  filename = "MYC_SPIN_LogReg_probability_allcells_red.tiff")
+
+
+saveRDS(preds.myc.sp.red, file = "MYC_SPIN_preds_red.rds")
+
+
+
+```
+
+
+## Permutation test on predicted scores
+We randomly permute (1,000 times) the scores per cell across cell types and calculate the average score per celltype each time. Then we compare it to the actual mean score. The exact pvalue (one-sided) would be the proportion of the means that are as or higher than the actual mean.
+
+```{r ruiht}
+# Actual means
+
+
+
+
+getactualMean <- function(predictions){
+  prob_mean <- as.matrix(sort(unlist(lapply(predictions, mean))))
+
+  ## Remove ct for which the model fails
+  prob_mean_nofail <- as.matrix(prob_mean[!(rownames(prob_mean) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early")),])
+  return(prob_mean_nofail)
+}
+
+shh.actualMeans <- getactualMean(preds.shh)
+myc.ic.actualMeans <- getactualMean(preds.myc.ic)
+myc.ec.actualMeans <- getactualMean(preds.myc.ec)
+myc.sp.actualMeans <- getactualMean(preds.myc.sp)
+
+
+getProbMat <- function(predictions, classes){
+  prob.mat <- matrix(unlist(predictions), ncol = length(levels(classes)), byrow = F)
+  colnames(prob.mat) <- levels(classes)
+
+  ## Remove ct for which the model fails
+  prob.mat.nofail <- prob.mat[, !(colnames(prob.mat) %in% c("Melanocytes","White blood cells", "Megakaryocytes", "Notochord early"))]
+  return(prob.mat.nofail)
+}
+
+# cells by rows, celltypes by cols
+shh.ProbMat <- getProbMat(preds.shh, classes)
+myc.ic.ProbMat <- getProbMat(preds.myc.ic, classes)
+myc.ec.ProbMat <- getProbMat(preds.myc.ec, classes)
+myc.sp.ProbMat <- getProbMat(preds.myc.sp, classes)
+
+getPvalue_df <- function(probMat, actualMeans){
+
+    permMat_mean <- list()
+    set.seed(123)
+    for(np in seq_len(999)){
+        # shuffle cols of original matrix (celltypes)
+        shufMat <- probMat[,sample(colnames(probMat), ncol(probMat), 
+                                   replace = FALSE)]
+        colnames(shufMat) <- colnames(probMat)
+        permMat_mean[[np]] <- colMeans(shufMat)
+    }
+    
+    # calculate empirical pvalue
+    emp_pvalue <- numeric(nrow(actualMeans))
+    for(ct in seq_len(nrow(actualMeans))){
+        permMeans <- unlist(lapply(permMat_mean, function(x) x[ct]))
+        emp_pvalue[ct] <- (1 + sum(permMeans >= actualMeans[ct]))/1000
+    }
+    
+    pvalue_df <- data.frame(celltype = rownames(actualMeans), p_val = emp_pvalue)
+    pvalue_df <- pvalue_df %>%
+      arrange(p_val)
+    return(pvalue_df)
+}
+    
+shh.pval.df <- getPvalue_df(shh.ProbMat, shh.actualMeans)
+myc.ic.pval.df <- getPvalue_df(myc.ic.ProbMat, myc.ic.actualMeans)
+myc.ec.pval.df <- getPvalue_df(myc.ec.ProbMat, myc.ec.actualMeans)
+myc.sp.pval.df <- getPvalue_df(myc.sp.ProbMat, myc.sp.actualMeans)
+
+WriteXLS::WriteXLS(list(SHH = shh.pval.df, MYC_IC = myc.ic.pval.df, eRT = myc.ec.pval.df, MYC_SPINAL = myc.sp.pval.df), ExcelFileName = "permutationtest_pvalues_subgroups.xlsx")
+ 
+
+
+
+```
+
