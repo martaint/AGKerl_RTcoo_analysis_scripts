@@ -1,5 +1,6 @@
 ---
 title: "sc Embryos published datasets: Marioni + Cao"
+author: "Marta Interlandi"
 output: html_document
 ---
 
@@ -556,67 +557,3 @@ plot_predictors(midhind.pred.genes, "midhind", embryo.reference.integrated)
 ```
 
 
-<!-- # Transfer labels -->
-
-<!-- ```{r vnfo} -->
-
-<!-- embryo.integrated <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/v2/embryos_integrated.rds") -->
-<!-- marioni.integrated <- readRDS(file = "/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v2/marioni_integrated.rds") -->
-
-<!-- DefaultAssay(embryo.integrated) <- "integrated" -->
-<!-- DefaultAssay(marioni.integrated) <- "integrated" -->
-
-<!-- embryo.anchors <- FindTransferAnchors(reference = marioni.integrated, query = embryo.integrated, -->
-<!--                                       dims = 1:30,  -->
-<!--                                       reference.assay = "integrated", query.assay = "integrated") -->
-<!-- predictions <- TransferData(anchorset = embryo.anchors, refdata = marioni.integrated$celltype,  -->
-<!--     dims = 1:30) -->
-<!-- embryo.integrated <- AddMetaData(embryo.integrated, metadata = predictions) -->
-
-<!-- tiff("embryo_integrated_celltype.tiff", width = 1200, height = 800) -->
-<!-- DimPlot(embryo.integrated, group.by = "predicted.id", pt.size = 0.5) -->
-<!-- dev.off() -->
-
-<!-- tiff("embryo_integrated_celltype_lab.tiff", width = 1200, height = 800) -->
-<!-- DimPlot(embryo.integrated, group.by = "predicted.id", pt.size = 0.5, label = T, label.size = 6) -->
-<!-- dev.off() -->
-
-<!-- saveRDS(embryo.integrated, file = "embryos_integrated_labels.rds") -->
-
-<!-- head(predictions) -->
-<!-- ``` -->
-
-<!-- ## Downsample marioni with geometric sketching -->
-
-<!-- ```{r cnduis} -->
-
-<!-- geosketch <- import("geosketch") -->
-<!-- X <- GetAssayData(object = marioni.integrated, slot = "data", assay = "RNA")  -->
-<!-- dim(X) -->
-<!-- # transpose matrix to have cells in rows, features in columns -->
-<!-- X <- t(as(X, "dgTMatrix")) -->
-<!-- dim(X) -->
-
-<!-- # Get top PCs from randomized SVD -->
-<!-- s <- rsvd(X, k = 30) -->
-<!-- X.pcs <- s$u %*% diag(s$d) -->
-
-<!-- sketch.size <- round(0.5 * nrow(X)) -->
-<!-- sketch.indices <- geosketch$gs(X.pcs, as.integer(sketch.size), seed = as.integer(234)) -->
-
-<!-- cells.sketch.integrated <- colnames(marioni.integrated)[unlist(sketch.indices)] -->
-
-<!-- marioni.sketch.int <- marioni.integrated[, cells.sketch.integrated] -->
-
-<!-- tiff("sketch_marioni_integrated_celltype.tiff", width = 1200, height = 800) -->
-<!-- DimPlot(marioni.sketch.int, group.by = "celltype", pt.size = 0.5, label = T, label.size = 6) -->
-<!-- dev.off() -->
-
-
-<!-- marioni.sampled <- marioni.integrated[, sample(Cells(marioni.integrated), 50000)] -->
-
-<!-- tiff("sampled_marioni_celltype.tiff", width = 1200, height = 800) -->
-<!-- DimPlot(marioni.sampled, group.by = "celltype", pt.size = 0.5, label = T, label.size = 6) -->
-<!-- dev.off() -->
-
-<!-- ``` -->
