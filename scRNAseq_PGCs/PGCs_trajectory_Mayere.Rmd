@@ -1,0 +1,327 @@
+---
+title: "Trajectories PGCs"
+author: "Marta Interlandi"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(Seurat)
+library(monocle3)
+library(ggplot2)
+library(sctransform)
+library(RColorBrewer)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(WriteXLS)
+library(Hmisc)
+library(pheatmap)
+
+setwd("/marta_home/scRNAseq_Ranalysis/Seurat_v3/trajectories/PGCs/chloe")
+
+
+load("/marta_home/scRNAseq_Ranalysis/Seurat_v3/trajectories/PGCs/chloe/workspace.RData")
+```
+
+
+# Load data
+
+```{r cnug}
+
+# PGCs from Marioni
+pgc.marioni <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/Embryos/published_data/v3/Marioni/full_marioni_integrated_PGCs.rds")
+
+DefaultAssay(pgc.marioni) <- "RNA"
+
+# PGCs from Chloe
+pgc.chloe <- read.csv("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/Data_Pgcs_Raw_Counts/raw_counts_matrix_pgcs.csv")
+
+chloe.metadata <- read.csv("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/Data_Pgcs_Raw_Counts/meta.data_no_adrenal.csv", stringsAsFactors = F)
+table(chloe.metadata$orig)
+head(pgc.chloe)
+
+# rename genes with gene-name
+ens.genes <- colnames(pgc.chloe)[-1]
+ens.genes <- unlist(lapply(strsplit(ens.genes, "\\."), function(x) x[[1]]))
+# 10x mapping ensembl / gene names
+g10x <- read.table("/marta_home/single-cellPUB/Chloe_Mayere_PGCs/genes.tsv")
+
+
+# cell names
+cell.names <- pgc.chloe$index
+chloe.mat <- t(pgc.chloe[, -1])
+rownames(chloe.mat) <- g10x[match(ens.genes, g10x$V1), "V2"]
+chloe.mat <- chloe.mat[!is.na(rownames(chloe.mat)), ]
+rownames(chloe.mat)
+
+dup.genes <- which(duplicated(rownames(chloe.mat)))
+rownames(chloe.mat)[dup.genes]
+chloe.mat <- chloe.mat[-dup.genes, ]
+
+colnames(chloe.mat) <- cell.names
+dim(chloe.mat)
+
+chloe.metadata <- chloe.metadata[match(cell.names, chloe.metadata$index), ]
+rownames(chloe.metadata) <- chloe.metadata$index
+#chloe.metadata$sex <- as.character(chloe.metadata$sex)
+#chloe.metadata$stage <- as.character(chloe.metadata$time)
+
+
+pgc.chloe <- CreateSeuratObject(chloe.mat, meta.data = chloe.metadata, min.cells = 10)
+
+pgc.chloe <- NormalizeData(pgc.chloe)
+
+
+# adding labels 
+pgc.chloe$stage <- pgc.chloe$time
+
+
+pgc.marioni$batch <- "marioni"
+pgc.chloe$batch <- "mayere"
+
+
+
+table(pgc.marioni$stage)
+pgc.marioni <- subset(pgc.marioni, subset = stage != "mixed_gastrulation")
+stage.comb <- pgc.marioni$stage
+stage.comb[grep("E7", stage.comb)] <-"E7"
+stage.comb[grep("E8", stage.comb)] <-"E8"
+table(stage.comb)
+pgc.marioni$time <- stage.comb
+pgc.marioni <- subset(pgc.marioni, subset = time != "E6.75")
+
+```
+
+
+
+# PGCs trajectory from marioni + chloe
+
+```{r dsno}
+gene_module_df_list <- list()
+
+
+pgc.mar.data <- GetAssayData(pgc.marioni, slot = "data")
+pgc.chloe.data <- GetAssayData(pgc.chloe, slot = "data")
+
+
+# keep only intersecting genes
+genes.intersecting <- intersect(rownames(pgc.mar.data), rownames(pgc.chloe.data))
+
+pgc.mar.data <- pgc.mar.data[genes.intersecting,]
+pgc.chloe.data <- pgc.chloe.data[genes.intersecting,]
+
+merged.data <- cbind(pgc.mar.data, pgc.chloe.data)
+
+cell.metadata <- data.frame(orig_id = c(rep("PGCs_marioni", ncol(pgc.mar.data)), as.character(pgc.chloe$orig)),
+                            batch = c(as.character(pgc.marioni$batch), as.character(pgc.chloe$batch)),
+                            time_point = c(as.character(pgc.marioni$time), as.character(pgc.chloe$time)),
+                            sex = c(rep("NA", ncol(pgc.mar.data)), as.character(pgc.chloe$sex)),
+                            row.names = colnames(merged.data))
+
+gene.metadata <- data.frame(gene_short_name = rownames(merged.data), row.names = rownames(merged.data))
+
+# Make the CDS object
+cds <- new_cell_data_set(merged.data, cell_metadata = cell.metadata, gene_metadata = gene.metadata)
+
+# Preprocessing
+cds <- preprocess_cds(cds, num_dim = 100, norm_method = "none", method = "PCA")
+cds <- align_cds(cds, alignment_group = "orig_id")
+               
+# Dimensionality reduction and trajectories
+
+cds <- reduce_dimension(cds, reduction_method = "UMAP")
+tiff("MONOCLE_PGC_umap.tiff", width = 700, height = 600)
+plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "batch", cell_size = 1.5, 
+         group_label_size = 7)
+dev.off()
+
+cds <- cluster_cells(cds)
+cds <- learn_graph(cds)
+
+tiff("MONOCLE_PGC_umap_graph_time.tiff", width = 800, height = 600)
+plot_cells(cds,
+           color_cells_by = "time_point",
+           label_groups_by_cluster=FALSE,
+           label_cell_groups = F,
+           label_leaves=FALSE,
+           label_branch_points=FALSE, cell_size = 1, 
+           label_roots = FALSE,
+           group_label_size = 7)
+dev.off()
+
+tiff("MONOCLE_PGC_umap_time.tiff", width = 800, height = 600)
+plot_cells(cds,
+           show_trajectory_graph = F,
+           color_cells_by = "time_point",
+           label_groups_by_cluster=FALSE,
+           label_cell_groups = F,
+           label_leaves=FALSE,
+           label_branch_points=FALSE, cell_size = 1, 
+           label_roots = FALSE,
+           group_label_size = 7)
+dev.off()
+
+tiff("MONOCLE_PGC_umap_graph_sex.tiff", width = 700, height = 600)
+plot_cells(cds,
+           show_trajectory_graph = F,
+           color_cells_by = "sex",
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_cell_groups = FALSE,
+           label_branch_points=FALSE, cell_size = 1.5, 
+           group_label_size = 7) + scale_color_manual(values = c("hotpink", "royalblue1", "snow4"))
+dev.off()
+
+cds <- order_cells(cds, root_cells = na.omit(rownames(cell.metadata)[cell.metadata$time_point == "E7"]))
+
+tiff("MONOCLE_PGC_umap_graph_pseudotime.tiff", width = 800, height = 600)
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           show_trajectory_graph = F,
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           label_roots = FALSE,
+           cell_size = 1, 
+           group_label_size = 7)
+dev.off()
+
+
+
+# Transfer UMAP coordinated to seurat object
+seu.pgcs <- merge(pgc.marioni, pgc.chloe)
+seu.pgcs
+
+seu.pgcs <- ScaleData(seu.pgcs)
+seu.pgcs <- FindVariableFeatures(seu.pgcs, selection.method = "vst", nfeatures = 2000)
+seu.pgcs <- RunPCA(seu.pgcs)
+seu.pgcs <- RunUMAP(seu.pgcs, dims = 1:30)
+
+umap.coord <- reducedDims(cds)$UMAP
+
+seu.umap.coord <- seu.pgcs@reductions$umap@cell.embeddings 
+attr.seu.umap <- attributes(seu.umap.coord)
+
+attr.mono <- attributes(reducedDims(cds)$UMAP)
+attr(umap.coord, "dim") <- attr.mono$dim
+attr(umap.coord, "scaled:center") <- attr.mono$`scaled:center`
+attr(umap.coord, "dimnames") <- attr.seu.umap$dimnames
+seu.pgcs@reductions$umap@cell.embeddings <- umap.coord
+
+# Plot genes in umap
+epi.umap <- c("Tet1", "Dnmt1", "Dnmt3a", "Ezh2")
+for(g in epi.umap){
+  tiff(paste0("MONOCLE_PGC_umap_",g, ".tiff"), width =800, height = 600)
+  print(FeaturePlot(object = seu.pgcs,  features = g, pt.size = 1, order = T))
+  dev.off()
+}
+
+## Add Cell Cycle phase
+s.genes <- capitalize(tolower(cc.genes$s.genes))
+g2m.genes <- capitalize(tolower(cc.genes$g2m.genes))
+seu.pgcs <- CellCycleScoring(seu.pgcs, s.features = s.genes, g2m.features = g2m.genes, set.ident = F)
+
+tiff("MONOCLE_PGC_umap_CC.tiff", width = 800, height = 600)
+DimPlot(seu.pgcs, pt.size = 1, group.by = "Phase", label = F, cols = c("#1f77b4", "#ff7f0e", "#279e68"))
+dev.off()
+
+
+
+### MONOCLE: plot genes in pseudotime
+epi.pseudo <- c("Tet1", "Dnmt1", "Dnmt3a", "Ezh2", "Prmt5", "Kdm6a", "Kdm1a")
+epi_cds <- cds[rowData(cds)$gene_short_name %in% epi.pseudo,]
+tiff("EPI_genes_in_pseudotime.tiff", width = 900, height = 900)
+plot_genes_in_pseudotime(epi_cds,
+                         ncol = 2,
+                         color_cells_by="pseudotime",
+                         min_expr=0.25,
+                         vertical_jitter = 0.4,
+                         horizontal_jitter = 0.2)
+dev.off()
+
+# Heatmap along pseudotime PGCs developmental genes
+pgc.dev.genes <- read_excel("./PGC_develop_genes.xlsx")
+
+gene.categ <- colnames(pgc.dev.genes)
+
+genes.all <- c()
+gaps <- c()
+for(cat in gene.categ){
+  genes <- capitalize(tolower(as.character(unlist(pgc.dev.genes[, cat]))))
+  genes <- genes[genes %in% rownames(seu.pgcs)]
+  gaps <- c(gaps, length(genes))
+  genes.all <- c(genes.all, genes)
+}
+
+# check for duplicated genes and delete them
+dup.genes <- genes.all[duplicated(genes.all)]
+
+pgc.mat <- GetAssayData(seu.pgcs, slot = "data", assay = "RNA")
+cell_pseudotime <- cds@principal_graph_aux@listData$UMAP$pseudotime
+# order cells by pseudotime
+# remove cells that have pseudotime = Inf
+cell_pseudotime <- cell_pseudotime[!is.infinite(cell_pseudotime)]
+pt.order <- sort(cell_pseudotime)
+pgc.mat <- pgc.mat[, names(pt.order)]
+  
+annotation_col <- data.frame(pseudotime = pt.order, row.names = names(pt.order))
+ann_colors = list(pseudotime = c("#140f8b", "#d2506f","#f0f921"))  
+annotation_row <- data.frame(gene_category = rep(gene.categ, times = gaps), row.names = genes.all)
+
+pgc.mat.sub <- pgc.mat[genes.all, ]
+dim(pgc.mat.sub)
+
+pheatmap(pgc.mat.sub, color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), scale = "none", cluster_rows = F, cluster_cols = F, annotation_col = annotation_col, annotation_colors = ann_colors, annotation_row = annotation_row, annotation_names_row = F, gaps_row = cumsum(gaps), show_rownames = T, show_colnames = F, filename = "PGCs_develop_heatmap_ALLgenes.tiff",  width = 10, height = 6)
+
+
+### Plotting only new EPI genes
+new.epi.genes <- read_excel("./new list Epigenetic genes.xlsx")
+
+new.epi.genes <- capitalize(tolower(as.character(new.epi.genes$`more epigenetic modifier`)))
+new.epi.genes <- new.epi.genes[new.epi.genes %in% rownames(seu.pgcs)]
+  
+
+
+pgc.mat <- GetAssayData(seu.pgcs, slot = "data", assay = "RNA")
+cell_pseudotime <- cds@principal_graph_aux@listData$UMAP$pseudotime
+# order cells by pseudotime
+# remove cells that have pseudotime = Inf
+cell_pseudotime <- cell_pseudotime[!is.infinite(cell_pseudotime)]
+pt.order <- sort(cell_pseudotime)
+pgc.mat <- pgc.mat[, names(pt.order)]
+  
+annotation_col <- data.frame(pseudotime = pt.order, row.names = names(pt.order))
+ann_colors = list(pseudotime = c("#140f8b", "#d2506f","#f0f921"))  
+
+
+pgc.mat.sub <- pgc.mat[new.epi.genes, ]
+dim(pgc.mat.sub)
+
+pheatmap(pgc.mat.sub, color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), scale = "none", cluster_rows = F, cluster_cols = F, annotation_col = annotation_col, annotation_colors = ann_colors,   show_rownames = T, show_colnames = F, filename = "PGCs_newEPI_heatmap.tiff",  width = 10, height = 6)
+
+pheatmap(pgc.mat.sub, color= colorRampPalette(brewer.pal(n = 9, name = "Greys"))(50), scale = "row", cluster_rows = F, cluster_cols = F, annotation_col = annotation_col, annotation_colors = ann_colors,   show_rownames = T, show_colnames = F, filename = "PGCs_newEPI_heatmap_scaled.tiff",  width = 10, height = 6)
+
+
+
+# Plot demethylation markers
+markers.tab <- read_xlsx("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/markers/demethyl_genes.xlsx")
+
+gene.categ <- colnames(markers.tab)
+
+
+genes <- capitalize(tolower(as.character(unlist(markers.tab[, gene.categ]))))
+genes <- genes[!is.na(genes)]
+genes <- genes[genes %in% rownames(seu.pgcs)]
+
+# Plot genes in umap
+
+for(g in genes){
+  tiff(paste0("./demethyl_genes/MONOCLE_PGC_umap_",g, ".tiff"), width =800, height = 600)
+  print(FeaturePlot(object = seu.pgcs,  features = g, pt.size = 1, order = T))
+  dev.off()
+}
+```
