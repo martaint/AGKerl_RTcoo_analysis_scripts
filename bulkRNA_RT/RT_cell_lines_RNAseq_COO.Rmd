@@ -1,0 +1,235 @@
+---
+title: "RT cell lines - Wang GSE71505"
+author: "Marta Interlandi"
+date: "7/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(AnnotationHub)
+library(tximport)
+library(DESeq2)
+library(biomaRt)
+library(xlsx)
+library(RColorBrewer)
+library(ggplot2)
+
+setwd("/home/RNAseq/RT_cellLines_Wang_GSE71505/R")
+load("/home/RNAseq/RT_cellLines_Wang_GSE71505/R/workspace.RData")
+
+```
+
+# Description
+
+Here we have 16 samples divided in 3 cell lines (BT16:6 samples, G401:4 samples, TM87:6 samples). Each cell line has control(No Dox) and condition (dox).
+
+
+```{r load}
+# Get metadata with pheno of each sample
+metadata <- read.table("../SraRunTable.txt", header = T, sep = ",", stringsAsFactors = F)
+meta.small <- metadata[, c("Run", "Cell_Line", "source_name", "treatment.condition")]
+table(meta.small$Cell_Line)
+rownames(meta.small) <- meta.small$Run
+
+dir <- "/home/RNAseq/RT_cellLines_Wang_GSE71505/salmon_out"
+files <- list.files(dir)
+filepaths <- file.path(dir, files, "quant.sf")
+names(filepaths) <- sub("_quant$", "", files)
+all(file.exists(filepaths))
+
+
+## Load the annotation resource.
+ah <- AnnotationHub()
+## Query for all available EnsDb databases
+query(ah, "EnsDb")
+ahDb <- query(ah, pattern = c("Homo Sapiens", "EnsDb", 94))
+ahEdb <- ahDb[[1]]
+df <- transcripts(ahEdb, return.type="DataFrame")
+
+tx2gene <- data.frame(TXNAME=df@listData$tx_id_version, GENEID=df@listData$gene_id, stringsAsFactors = F)
+
+
+
+# BT16
+f <- sub("_quant", "", files)
+bt16.samples <- meta.small[meta.small$Cell_Line == "BT16", "Run"]
+
+txi.bt16 <- tximport(filepaths[f %in% bt16.samples], type = "salmon", tx2gene = tx2gene)
+
+
+head(txi.bt16$counts)
+
+
+############# DESEQ2
+meta.small[colnames(txi.bt16$counts), "source_name"]
+sampleTable <- data.frame(condition = factor(c(rep("NoDox",3),  rep("Dox",3))))
+rownames(sampleTable) <- colnames(txi.bt16$counts)
+
+dds <- DESeqDataSetFromTximport(txi.bt16, sampleTable, ~condition)
+
+#Run the default analysis for DESeq2 and generate results table
+dds <- DESeq(dds)
+resultsNames(dds)
+
+
+res.bt16 <- results(dds, name = "condition_NoDox_vs_Dox")
+summary(res.bt16)
+
+
+
+# Convert names
+# Map the Ensembl ID (ENSMUSG00000036958) to gene_symbol with Biomart
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+#listDatasets(mart)
+#listAttributes(mart)
+mapping <- getBM(attributes=c("ensembl_gene_id", "hgnc_symbol"),
+                 mart=mart)
+
+
+printSigGenes <- function(res, mapping){
+  resOrdered <- res[order(res$padj), ]
+  resOrdered <- resOrdered[!is.na(resOrdered$padj), ]
+  resSign <- resOrdered[resOrdered$padj < 0.05,]
+  
+  # Save full list of DE genes 
+  res.df <- data.frame(ensembl = rownames(resSign), gene = as.character(mapping[match(rownames(resSign), mapping$ensembl_gene_id), "hgnc_symbol"]),
+                        log2FC = resSign$log2FoldChange, 
+                        adj_p_value = resSign$padj)
+
+return(res.df)
+
+}
+
+
+res.bt16.df <- printSigGenes(res.bt16, mapping)
+write.xlsx(res.bt16.df,file = "DE_BT16_noDoxvsDox.xlsx", row.names = F)
+
+## Plot SMARCB1 -> 2 transcripts ENSG00000275837 and ENSG00000099956
+d <- plotCounts(dds, gene="ENSG00000275837", intgroup="condition", 
+                returnData=TRUE)
+
+tiff("BT16_smarcb1_expression_tr1.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000275837) expression (log scale)")
+dev.off()
+
+d <- plotCounts(dds, gene="ENSG00000099956", intgroup="condition", 
+                returnData=TRUE, transform = T)
+
+tiff("BT16_smarcb1_expression_tr2.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000099956) expression (log scale)")
+dev.off()
+
+
+# G401
+g401.samples <- meta.small[meta.small$Cell_Line == "G401", "Run"]
+
+txi.g401 <- tximport(filepaths[f %in% g401.samples], type = "salmon", tx2gene = tx2gene)
+
+
+head(txi.g401$counts)
+
+
+############# DESEQ2
+meta.small[colnames(txi.g401$counts), "source_name"]
+sampleTable <- data.frame(condition = factor(c(rep("NoDox",2),  rep("Dox",2))))
+rownames(sampleTable) <- colnames(txi.g401$counts)
+
+dds <- DESeqDataSetFromTximport(txi.g401, sampleTable, ~condition)
+
+#Run the default analysis for DESeq2 and generate results table
+dds <- DESeq(dds)
+resultsNames(dds)
+
+
+res.g401 <- results(dds, name = "condition_NoDox_vs_Dox")
+summary(res.g401)
+
+
+
+res.g401.df <- printSigGenes(res.g401, mapping)
+write.xlsx(res.g401.df,file = "DE_G401_noDoxvsDox.xlsx", row.names = F)
+
+## Plot SMARCB1 -> 2 transcripts ENSG00000275837 and ENSG00000099956
+d <- plotCounts(dds, gene="ENSG00000275837", intgroup="condition", 
+                returnData=TRUE)
+
+tiff("G401_smarcb1_expression_tr1.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000275837) expression (log scale)")
+dev.off()
+
+d <- plotCounts(dds, gene="ENSG00000099956", intgroup="condition", 
+                returnData=TRUE, transform = T)
+
+tiff("G401_smarcb1_expression_tr2.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000099956) expression (log scale)")
+dev.off()
+
+# TM87
+tm87.samples <- meta.small[meta.small$Cell_Line == "TM87", "Run"]
+
+txi.tm87 <- tximport(filepaths[f %in% tm87.samples], type = "salmon", tx2gene = tx2gene)
+
+
+head(txi.tm87$counts)
+
+
+############# DESEQ2
+meta.small[colnames(txi.tm87$counts), "source_name"]
+sampleTable <- data.frame(condition = factor(c(rep("NoDox",3),  rep("Dox",3))))
+rownames(sampleTable) <- colnames(txi.tm87$counts)
+
+dds <- DESeqDataSetFromTximport(txi.tm87, sampleTable, ~condition)
+
+#Run the default analysis for DESeq2 and generate results table
+dds <- DESeq(dds)
+resultsNames(dds)
+
+
+res.tm87 <- results(dds, name = "condition_NoDox_vs_Dox")
+summary(res.tm87)
+
+
+
+res.tm87.df <- printSigGenes(res.tm87, mapping)
+write.xlsx(res.tm87.df,file = "DE_TM87_noDoxvsDox.xlsx", row.names = F)
+
+
+
+# Plot SMARCB1
+d <- plotCounts(dds, gene="ENSG00000275837", intgroup="condition", 
+                returnData=TRUE)
+
+tiff("TM87_smarcb1_expression_tr1.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000275837) expression (log scale)")
+dev.off()
+
+d <- plotCounts(dds, gene="ENSG00000099956", intgroup="condition", 
+                returnData=TRUE, transform = T)
+
+tiff("TM87_smarcb1_expression_tr2.tiff", width = 800, height = 600)
+ggplot(d, aes(x=condition, y=count)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size=5) +
+  theme_light(base_size = 20) +
+  ggtitle("SMARCB1 (ENSG00000099956) expression (log scale)")
+dev.off()
+
+```
