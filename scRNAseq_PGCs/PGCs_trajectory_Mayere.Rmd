@@ -1,6 +1,5 @@
 ---
-title: "Trajectories PGCs"
-author: "Marta Interlandi"
+title: "Trajectories PGCs- MYC tumors"
 output: html_document
 ---
 
@@ -75,15 +74,41 @@ pgc.chloe <- CreateSeuratObject(chloe.mat, meta.data = chloe.metadata, min.cells
 
 pgc.chloe <- NormalizeData(pgc.chloe)
 
+# MYC IC
+myc.ic <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_MYC/myc_ic_tumor_cells.rds")
+
+DefaultAssay(myc.ic) <- "RNA"
+
+# MYC EC
+myc.ec <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/MRT_EC_MYC/myc_ec_tumor_cells.rds")
+
+DefaultAssay(myc.ec) <- "RNA"
+
+# MYC spinal
+myc.spinal <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_spinal_MYC/myc_spinal_tumor_cells.rds")
+
+DefaultAssay(myc.spinal) <- "RNA"
+
+# SHH IC
+shh <- readRDS("/marta_home/scRNAseq_Ranalysis/Seurat_v3/mouseATRT/v3/ATRT_IC_SHH/shh_tumor_cells.rds")
+
+DefaultAssay(shh) <- "RNA"
 
 # adding labels 
 pgc.chloe$stage <- pgc.chloe$time
-
+myc.ic$stage <- "MYC-IC"
+myc.ec$stage <- "MYC-EC"
+myc.spinal$stage <- "MYC-spinal"
+shh$stage <- "SHH-IC"
 
 pgc.marioni$batch <- "marioni"
 pgc.chloe$batch <- "mayere"
+myc.ic$batch <- "MYC-IC"
+myc.ec$batch <- "MYC-EC"
+myc.spinal$batch <- "MYC-spinal"
+shh$batch <- "SHH-IC"
 
-
+myc.list <- list(MYC_IC = myc.ic, MYC_EC = myc.ec, MYC_SPINAL = myc.spinal)
 
 table(pgc.marioni$stage)
 pgc.marioni <- subset(pgc.marioni, subset = stage != "mixed_gastrulation")
@@ -93,6 +118,665 @@ stage.comb[grep("E8", stage.comb)] <-"E8"
 table(stage.comb)
 pgc.marioni$time <- stage.comb
 pgc.marioni <- subset(pgc.marioni, subset = time != "E6.75")
+myc.ic$time <- "MYC-IC"
+myc.ec$time <- "MYC-EC"
+myc.spinal$time <- "MYC-spinal"
+shh$time <- "SHH-IC"
+```
+
+## DE all PGCs vs MYC
+
+```{r csnui}
+
+pgcs <- merge(pgc.marioni, pgc.chloe)
+pgcs$batch <- "PGCs"
+pgcs <- NormalizeData(pgcs)
+de.numbers <- matrix(0, nrow=3, ncol = 2)
+rownames(de.numbers) <- names(myc.list)
+colnames(de.numbers) <- c("up", "down")
+
+for(i in 1:length(myc.list)){
+  subgroup <- names(myc.list[i])
+  tum_pgc <- merge(pgcs, myc.list[[i]])
+  DefaultAssay(tum_pgc) <- "RNA"
+  tum_pgc <- NormalizeData(tum_pgc)
+  Idents(tum_pgc) <- tum_pgc$batch  
+  markers <- FindMarkers(tum_pgc, ident.1 = "PGCs", test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("DE_PGCsmar_chloVS", subgroup, ".xlsx"), row.names = T)
+  up <- sum(markers$avg_logFC >0)
+  down <- sum(markers$avg_logFC <0)
+  de.numbers[rownames(de.numbers) == subgroup, colnames(de.numbers) == "up"] <- up
+  de.numbers[rownames(de.numbers) == subgroup, colnames(de.numbers) == "down"] <- down
+}
+
+
+WriteXLS(as.data.frame(de.numbers), ExcelFileName = "DE_Numbers_PGCs_MYC.xlsx", row.names = T)
+
+## DE PGCs (E6.75-E10.5) vs tumor subgroups 
+pgcs <- merge(pgc.marioni, pgc.chloe)
+table(pgcs$time)
+pgcs_early <- subset(pgcs, subset = time %in% c("E7", "E8", "E10.5"))
+table(pgcs_early$time)
+pgcs_early$batch <- "PGCs"
+pgcs_early <- NormalizeData(pgcs_early)
+de.numbers <- matrix(0, nrow=3, ncol = 2)
+rownames(de.numbers) <- names(myc.list)
+colnames(de.numbers) <- c("up", "down")
+
+for(i in 1:length(myc.list)){
+  subgroup <- names(myc.list[i])
+  tum_pgc <- merge(pgcs_early, myc.list[[i]])
+  DefaultAssay(tum_pgc) <- "RNA"
+  tum_pgc <- NormalizeData(tum_pgc)
+  Idents(tum_pgc) <- tum_pgc$batch  
+  markers <- FindMarkers(tum_pgc, ident.1 = "PGCs", test.use = "MAST")
+  markers <- markers[markers$p_val_adj < 0.05, ]
+  markers <- markers[!is.na(markers$p_val_adj), ]
+  WriteXLS(markers, ExcelFileName = paste0("DE_PGCsE7-E10.5VS", subgroup, ".xlsx"), row.names = T)
+  up <- sum(markers$avg_logFC >0)
+  down <- sum(markers$avg_logFC <0)
+  de.numbers[rownames(de.numbers) == subgroup, colnames(de.numbers) == "up"] <- up
+  de.numbers[rownames(de.numbers) == subgroup, colnames(de.numbers) == "down"] <- down
+}
+WriteXLS(as.data.frame(de.numbers), ExcelFileName = "DE_Numbers_PGC_7-10.5_MYC.xlsx", row.names = T)
+
+
+#### DE by clusters for tumors
+pgcs$new_clustering <- "PGCs"
+
+for(i in 1:length(myc.list)){
+  subgroup <- names(myc.list[i])
+  tum_pgc <- merge(pgcs, myc.list[[i]])
+  DefaultAssay(tum_pgc) <- "RNA"
+  tum_pgc <- NormalizeData(tum_pgc)
+  Idents(tum_pgc) <- tum_pgc$new_clustering 
+  
+  de.numbers <- matrix(0, nrow=length(unique(myc.list[[i]]$new_clustering)), ncol = 2)
+  rownames(de.numbers) <- unique(myc.list[[i]]$new_clustering)
+  colnames(de.numbers) <- c("up", "down")
+  for(tum_clust in unique(myc.list[[i]]$new_clustering)){
+    markers <- FindMarkers(tum_pgc, ident.1 = "PGCs", ident.2 = tum_clust, test.use = "MAST")
+    markers <- markers[markers$p_val_adj < 0.05, ]
+    markers <- markers[!is.na(markers$p_val_adj), ]
+    WriteXLS(markers, ExcelFileName = paste0("DE_PGCsmar_chloVS", subgroup, "_", tum_clust, ".xlsx"), row.names = T)
+    up <- sum(markers$avg_logFC >0)
+    down <- sum(markers$avg_logFC <0)
+    de.numbers[rownames(de.numbers) == tum_clust, colnames(de.numbers) == "up"] <- up
+    de.numbers[rownames(de.numbers) == tum_clust, colnames(de.numbers) == "down"] <- down
+  }
+  WriteXLS(as.data.frame(de.numbers), ExcelFileName = paste0("DE_Numbers_PGCs_", subgroup, "_byClust.xlsx"), row.names = T)
+
+}
+
+
+
+
+
+
+
+```
+
+## Saving objects for Scanpy
+
+```{r nfo}
+pgc.marioni.py <- as.SingleCellExperiment(pgc.marioni, assay = "RNA")
+saveRDS(pgc.marioni.py, file = "pgc_marioni_py.rds")
+
+pgc.chloe.py <- as.SingleCellExperiment(pgc.chloe, assay = "RNA")
+saveRDS(pgc.chloe.py, file = "pgc_chloe_py.rds")
+
+myc.ic.py <- as.SingleCellExperiment(myc.ic, assay = "RNA")
+saveRDS(myc.ic.py, file = "MYC_IC_py.rds")
+
+myc.ec.py <- as.SingleCellExperiment(myc.ec, assay = "RNA")
+saveRDS(myc.ec.py, file = "MYC_EC_py.rds")
+
+myc.spin.py <- as.SingleCellExperiment(myc.spinal, assay = "RNA")
+saveRDS(myc.spin.py, file = "MYC_spin_py.rds")
+
+```
+
+## Trajectories constructed with DPT dividing female VS male : DE
+
+```{r cfnugi}
+chloe_meta_female <- read.csv("/marta_home/scanpy_1.4.5/Kornelius/COO_project/PGC_trajectory/write/chloe_metadata_female.csv")
+chloe_meta_male <- read.csv("/marta_home/scanpy_1.4.5/Kornelius/COO_project/PGC_trajectory/write/chloe_metadata_male.csv")
+
+# separate pgc.chloe in female and male objects
+pgc.chloe.f <- subset(pgc.chloe, subset = sex == "Female")
+pgc.chloe.m <- subset(pgc.chloe, subset = sex == "Male")
+
+pgc.chloe.f <- NormalizeData(pgc.chloe.f)
+pgc.chloe.m <- NormalizeData(pgc.chloe.m)
+
+pgc.chloe.f$dpt_pseudotime <- chloe_meta_female[match(chloe_meta_female$X, colnames(pgc.chloe.f)), "dpt_pseudotime"]
+pgc.chloe.m$dpt_pseudotime <- chloe_meta_male[match(chloe_meta_male$X, colnames(pgc.chloe.m)), "dpt_pseudotime"]
+
+# create start and end points 
+pgc.chloe.f$pseudotime_cat <- NA
+pgc.chloe.f$pseudotime_cat[WhichCells(pgc.chloe.f, expression = dpt_pseudotime < 0.2)] <- "start"
+pgc.chloe.f$pseudotime_cat[WhichCells(pgc.chloe.f, expression = dpt_pseudotime > 0.8)] <- "end"
+
+pgc.chloe.m$pseudotime_cat <- NA
+pgc.chloe.m$pseudotime_cat[WhichCells(pgc.chloe.m, expression = dpt_pseudotime < 0.2)] <- "start"
+pgc.chloe.m$pseudotime_cat[WhichCells(pgc.chloe.m, expression = dpt_pseudotime > 0.8)] <- "end"
+
+
+### DE start points vs end points
+Idents(pgc.chloe.f) <- pgc.chloe.f$pseudotime_cat
+
+markers <- FindMarkers(pgc.chloe.f, ident.1 = "start", ident.2 = "end", test.use = "MAST", assay = "RNA")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = "DE_chloe_F_startVSend.xlsx", row.names = T)
+
+Idents(pgc.chloe.m) <- pgc.chloe.m$pseudotime_cat
+
+markers <- FindMarkers(pgc.chloe.m, ident.1 = "start", ident.2 = "end", test.use = "MAST")
+markers <- markers[markers$p_val_adj < 0.05, ]
+markers <- markers[!is.na(markers$p_val_adj), ]
+WriteXLS(markers, ExcelFileName = "DE_chloe_M_startVSend.xlsx", row.names = T)
+
+
+
+df <- data.frame(time = as.character(pgc.chloe.m$time), 
+                 pseudotime_cat = as.character(pgc.chloe.m$pseudotime_cat), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(time, pseudotime_cat) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, time~pseudotime_cat)
+WriteXLS(final, ExcelFileName = "Chloe_M_pseudotimeBYtimepoint.xlsx", row.names = F)
+
+df <- data.frame(time = as.character(pgc.chloe.f$time), 
+                 pseudotime_cat = as.character(pgc.chloe.f$pseudotime_cat), 
+                  stringsAsFactors = F)
+Summary <- df %>%
+  group_by(time, pseudotime_cat) %>%
+  dplyr::summarize(n())
+final <- recast(Summary, time~pseudotime_cat)
+WriteXLS(final, ExcelFileName = "Chloe_F_pseudotimeBYtimepoint.xlsx", row.names = F)
+```
+
+
+## Epigenetic modifiers over normal + tumor
+
+```{r vno}
+pgc.chloe <- NormalizeData(pgc.chloe)
+
+data.merged <- merge(pgc.chloe, pgc.marioni)
+data.merged <- merge(data.merged, myc.ic)
+data.merged <- merge(data.merged, myc.ec)
+data.merged <- merge(data.merged, myc.spinal)
+
+data.merged <- NormalizeData(data.merged)
+data.merged <- ScaleData(data.merged)
+
+table(data.merged$stage)
+data.merged <- subset(data.merged, subset = stage != "mixed_gastrulation")
+epi.genes <- c("Dnmt3l", "Tet1", "Uhrf1", "Kdm6a", "Dnmt1", "Dnmt3a", "Ezh2")
+epi.genes2 <- c("Dnmt3l", "Tet1", "Uhrf1", "Kdm6a", 'Tet2', 'Tet3', 'Prmt1', 'Prmt5', 'Ehmt2', 'Ogg1', 'Kdm1a', 'Kdm4a', 'Padi4', 'Dot1l')
+
+stage.comb <- data.merged$stage
+stage.comb[grep("E7", stage.comb)] <-"E7"
+stage.comb[grep("E8", stage.comb)] <-"E8"
+table(stage.comb)
+data.merged$stage.comb <- stage.comb
+data.merged$stage.comb <- factor(data.merged$stage.comb, levels = c("E6.75", "E7", "E8", "E10.5", "E11.5", "E12.5", "E13.5", "E16.5", "MYC-EC", "MYC-IC", "MYC-spinal"))
+
+# tiff("dotplot_epi_modif_PGCs_tumors_time.tiff", width = 800, height = 900)
+# DotPlot(data.merged, assay = "RNA", features = epi.genes, group.by = "stage.comb", cols = c("red", "blue"))
+# dev.off()
+
+tiff("dotplot_epi_modif_PGCs_tumors_time2.tiff", width = 800, height = 500)
+DotPlot(data.merged, assay = "RNA", features = epi.genes2, group.by = "stage.comb", cols = c("aquamarine", "darkblue"))
+dev.off()
+
+### ECM genes migration
+ecm.genes <- read_excel("./ECM_genes_migration.xlsx", col_names = T)
+ecm.genes <- ecm.genes$`ECM marker`[ecm.genes$`ECM marker` %in% rownames(data.merged)]
+ecm.genes <- unique(ecm.genes)
+
+tiff("dotplot_ECMgenes_PGCs_tumors_time.tiff", width = 1100, height = 500)
+DotPlot(data.merged, assay = "RNA", features = ecm.genes, group.by = "stage.comb", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+dev.off()
+
+
+# separating Tumors from PGC for dotplots
+tum.dot <- subset(data.merged, subset = stage.comb %in% c("MYC-spinal", "MYC-IC", "MYC-EC"))
+
+tiff("dotplot_ECMgenes_tumors_time.tiff", width = 1100, height = 500)
+DotPlot(tum.dot, assay = "RNA", features = ecm.genes, group.by = "stage.comb", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+dev.off()
+
+pgc.dot <- subset(data.merged, subset = stage.comb %in% c("E6.75", "E7", "E8", "E10.5", "E11.5", "E12.5", "E13.5", "E16.5"))
+
+tiff("dotplot_ECMgenes_pgcs_time.tiff", width = 1100, height = 500)
+DotPlot(pgc.dot, assay = "RNA", features = ecm.genes, group.by = "stage.comb", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+dev.off()
+
+## Plotting only subset of genes
+ecm.sub.gene <- c("Fn1", "Cldn6", "Cldn7", "Cldnd1", "Ctnnb1", "Col3a1", "Itgb5", "Itgb1", "Itgav", "Sdc4", "Tln1")
+
+tiff("dotplot_ECMgenes_tumors4Fig.tiff", width = 500, height = 300)
+DotPlot(tum.dot, assay = "RNA", features = ecm.sub.gene, group.by = "stage.comb", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + scale_x_discrete(limits = levels(factor(ecm.sub.gene)))
+dev.off()
+
+
+tiff("dotplot_ECMgenes_pgcs_time4Fig.tiff", width = 500, height = 300)
+DotPlot(pgc.dot, assay = "RNA", features = ecm.sub.gene, group.by = "stage.comb", cols = c("aquamarine", "darkblue")) + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) + scale_x_discrete(limits = levels(factor(ecm.sub.gene)))
+dev.off()
+
+
+
+
+
+### BOXPLOT
+my_boxplot_ggplot2 <- function(genes, data.matrix, pheno){
+  
+  genes <- genes[genes %in% rownames(data.matrix)]
+  genes <- genes[order(genes)]
+  
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(data.matrix)))))
+  value <- as.vector(t(data.matrix[genes,])) #traspose it's super important!
+  condition <- rep(pheno,length(genes)) 
+  
+  df.boxplot <- data.frame(gene , value, condition)
+  
+  
+  p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Log-Normalized Gene Expression") +
+    #scale_x_discrete(genes, name = "Genes") +
+    #ggtitle("Epigenetic modifiers") +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 14)) + 
+    scale_fill_brewer(type = "seq", palette = "Greys")
+    
+  
+  return(p)
+}
+
+tiff("Boxplot_epi_modif_PGCs_tumor_time.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2(epi.genes, as.matrix(GetAssayData(data.merged, "data")), data.merged$stage))
+dev.off()
+
+for(g in epi.genes){
+  tiff(paste0("boxplot_epi_single_", g, ".tiff"), width = 900, height = 500)
+  print(plot(my_boxplot_ggplot2(g,as.matrix(GetAssayData(data.merged, "data")), data.merged$stage)))
+  dev.off()
+}
+
+tiff("Boxplot_Dnd1_PGCs_tumor_time.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Dnd1", as.matrix(GetAssayData(data.merged, "data")), data.merged$stage))
+dev.off()
+
+tiff("Boxplot_Dnd1_PGCs_tumor_time_comb.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Dnd1", as.matrix(GetAssayData(data.merged, "data")), data.merged$stage.comb))
+dev.off()
+
+# including SHH 
+shh$stage.comb <- "SHH-IC"
+data.merged.shh <- merge(data.merged, shh)
+tiff("Boxplot_Dnd1_PGCs_tumor_time_comb_SHH.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Dnd1", as.matrix(GetAssayData(data.merged.shh, "data")), data.merged.shh$stage.comb))
+dev.off()
+
+
+
+#### Boxplot of pgc.chloe by time point
+tiff("Boxplot_Prdm1_PGCs_Mayere_time.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Prdm1", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$stage))
+dev.off()
+tiff("Boxplot_Dppa3_PGCs_Mayere_time.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Dppa3", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$stage))
+dev.off()
+
+#### Boxplot of pgc.chloe by sex
+tiff("Boxplot_Prdm1_PGCs_Mayere_sex.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Prdm1", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$sex))
+dev.off()
+tiff("Boxplot_Dppa3_PGCs_Mayere_sex.tiff", width = 900, height =500)
+plot(my_boxplot_ggplot2("Dppa3", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$sex))
+dev.off()
+
+
+my_boxplot_ggplotSexTime <- function(genes, data.matrix, pheno){
+  
+  genes <- genes[genes %in% rownames(data.matrix)]
+  genes <- genes[order(genes)]
+  
+  gene <- unlist(lapply(genes, function(i) rep(i,length(colnames(data.matrix)))))
+  value <- as.vector(t(data.matrix[genes,])) #traspose it's super important!
+  condition <- rep(pheno,length(genes)) 
+  
+  df.boxplot <- data.frame(gene , value, condition)
+  
+  
+  p <- ggplot(df.boxplot, aes(x = gene, y = value, fill = condition)) +
+    geom_boxplot(alpha=1) +
+    scale_y_continuous(name = "Log-Normalized Gene Expression") +
+    theme_bw() +
+    theme(plot.title = element_text(size = 14, family = "Tahoma", face = "bold"),
+          text = element_text(size = 12, family = "Tahoma"),
+          axis.title = element_text(face="bold"),
+          axis.text.x=element_text(size = 14)) + 
+    scale_fill_manual(values = rep(brewer.pal(5, "Greys"),2)) 
+    
+  
+  return(p)
+}
+
+
+#### Boxplot of pgc.chloe by sex and time
+tiff("Boxplot_Prdm1_PGCs_Mayere_timesex.tiff", width = 900, height =500)
+plot(my_boxplot_ggplotSexTime("Prdm1", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$sex_time))
+dev.off()
+tiff("Boxplot_Dppa3_PGCs_Mayere_timesex.tiff", width = 900, height =500)
+plot(my_boxplot_ggplotSexTime("Dppa3", as.matrix(GetAssayData(pgc.chloe, "data")), pgc.chloe$sex_time))
+dev.off()
+
+
+
+```
+
+## Dnmt3a/b Dnmt1, Ezh2 in tumor clusters
+
+```{r csoauf}
+for (i in 1:length(myc.list)){
+  myc <- myc.list[[i]]
+  tiff(paste0(names(myc.list[i]) ,"dotplot_Dnmts_Ezh2.tiff"), width = 400, height = 500)
+  print(DotPlot(myc, assay = "RNA", features = c("Ezh2", "Dnmt3a", "Dnmt3b", "Dnmt1"),
+                group.by = "new_clustering", cols = c("aquamarine", "darkblue"))) 
+  dev.off()
+}
+```
+
+## Heatmaps tumors Chloe Fig3 genes
+
+```{r csnfo}
+ch.mark <- read_excel("./ChloeFig3_markers.xlsx", col_names = T)
+ch.mark <- ch.mark$ChloeFig3
+
+for(i in 1:length(myc.list)){
+  myc <- myc.list[[i]]
+  mat <- GetAssayData(myc, slot = "data", assay = "RNA")
+  genes <- ch.mark[ch.mark %in% rownames(myc)]
+  mat <- mat[genes,]
+
+  
+  # order cells by cluster
+  clusts <- sort(myc$new_clustering)
+  
+  mat <- mat[, names(clusts)]
+
+
+  ## aggregate cluster by computing average
+
+  mat <- as.data.frame(t(as.matrix(mat)))
+
+  mat$cluster <- clusts
+
+  mean.mat <- aggregate(. ~ cluster, mat, mean)
+  rownames(mean.mat) <- mean.mat$cluster
+
+  annotation_col <- data.frame(cluster= mean.mat$cluster, row.names = rownames(mean.mat))
+
+  mean.mat <- mean.mat[,-1]
+  mean.mat <- t(as.matrix(mean.mat))
+
+  pheatmap(mean.mat, scale = "row", cluster_rows = F, cluster_cols = F,  annotation_col = annotation_col, show_rownames = T, show_colnames = F, filename = paste0(names(myc.list[i]), "_chloeFig3_heat.tiff"), width = 6, height = 10)
+
+
+}
+
+
+```
+
+
+## DE tumors vs Chloe by time point
+
+
+```{r ncb}
+pgc.chloe$de <- pgc.chloe$time
+myc.ic$de <- myc.ic$new_clustering
+myc.ec$de <- myc.ec$new_clustering
+myc.spinal$de <- myc.spinal$new_clustering
+
+tum_pgc <- merge(myc.ic, pgc.chloe)
+Idents(tum_pgc) <- tum_pgc$de
+
+up.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.ic$new_clustering)))
+rownames(up.numbers) <- unique(pgc.chloe$time)
+colnames(up.numbers) <- unique(myc.ic$new_clustering)
+
+down.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.ic$new_clustering)))
+rownames(down.numbers) <- unique(pgc.chloe$time)
+colnames(down.numbers) <- unique(myc.ic$new_clustering)
+
+
+for(tum.clust in unique(myc.ic$new_clustering)){
+  for(time in unique(pgc.chloe$time)){
+    markers <- FindMarkers(tum_pgc, ident.1 = tum.clust, ident.2 = time, test.use = "MAST")
+    markers <- markers[markers$p_val_adj < 0.05, ]
+    markers <- markers[!is.na(markers$p_val_adj), ]
+    WriteXLS(markers, ExcelFileName = paste0("DE_MYC_IC_clust", tum.clust, "vsPGC_", time, ".xlsx"), row.names = T)
+    up <- sum(markers$avg_logFC >0)
+    down <- sum(markers$avg_logFC <0)
+    up.numbers[rownames(up.numbers) == time, colnames(up.numbers) == tum.clust] <- up
+    down.numbers[rownames(down.numbers) == time, colnames(down.numbers) == tum.clust] <- down
+  }
+}
+
+# f <- list.files("./DE_MYC_IC_time/")
+# for(i in 1:length(f)){
+#   markers <- read_excel(paste0("./DE_MYC_IC_time/", f[i]))
+#   tum.clust <- sub("clust", "", unlist(strsplit(f[i], "_"))[4])
+#   tum.clust <- sub("vsPGC", "", tum.clust)
+#   time <- sub(".xlsx", "", unlist(strsplit(f[i], "_"))[5])
+#   
+#   up <- sum(markers$avg_logFC >0)
+#   down <- sum(markers$avg_logFC <0)
+#   up.numbers[rownames(up.numbers) == time, colnames(up.numbers) == tum.clust] <- up
+#   down.numbers[rownames(down.numbers) == time, colnames(down.numbers) == tum.clust] <- down
+# }
+
+up.numbers <- as.data.frame(up.numbers, row.names = rownames(up.numbers))
+down.numbers <- as.data.frame(down.numbers, row.names = rownames(down.numbers))
+WriteXLS(up.numbers, ExcelFileName = paste0("MYC_ICvsChloe_upregulated_Numbers.xlsx"), row.names = T)
+WriteXLS(down.numbers, ExcelFileName = paste0("MYC_ICvsChloe_downregulated_Numbers.xlsx"), row.names = T)
+
+
+tum_pgc <- merge(myc.ec, pgc.chloe)
+Idents(tum_pgc) <- tum_pgc$de
+
+up.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.ec$new_clustering)))
+rownames(up.numbers) <- unique(pgc.chloe$time)
+colnames(up.numbers) <- unique(myc.ec$new_clustering)
+
+down.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.ec$new_clustering)))
+rownames(down.numbers) <- unique(pgc.chloe$time)
+colnames(down.numbers) <- unique(myc.ec$new_clustering)
+
+
+for(tum.clust in unique(myc.ec$new_clustering)){
+  for(time in unique(pgc.chloe$time)){
+    markers <- FindMarkers(tum_pgc, ident.1 = tum.clust, ident.2 = time, test.use = "MAST")
+    markers <- markers[markers$p_val_adj < 0.05, ]
+    markers <- markers[!is.na(markers$p_val_adj), ]
+    WriteXLS(markers, ExcelFileName = paste0("DE_MYC_EC_clust", tum.clust, "vsPGC_", time, ".xlsx"), row.names = T)
+    up <- sum(markers$avg_logFC >0)
+    down <- sum(markers$avg_logFC <0)
+    up.numbers[rownames(up.numbers) == time, colnames(up.numbers) == tum.clust] <- up
+    down.numbers[rownames(down.numbers) == time, colnames(down.numbers) == tum.clust] <- down
+  }
+}
+
+
+
+up.numbers <- as.data.frame(up.numbers, row.names = rownames(up.numbers))
+down.numbers <- as.data.frame(down.numbers, row.names = rownames(down.numbers))
+WriteXLS(up.numbers, ExcelFileName = paste0("MYC_ECvsChloe_upregulated_Numbers.xlsx"), row.names = T)
+WriteXLS(down.numbers, ExcelFileName = paste0("MYC_ECvsChloe_downregulated_Numbers.xlsx"), row.names = T)
+
+tum_pgc <- merge(myc.spinal, pgc.chloe)
+Idents(tum_pgc) <- tum_pgc$de
+
+up.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.spinal$new_clustering)))
+rownames(up.numbers) <- unique(pgc.chloe$time)
+colnames(up.numbers) <- unique(myc.spinal$new_clustering)
+
+down.numbers <- matrix(0, nrow=length(unique(pgc.chloe$time)), ncol = length(unique(myc.spinal$new_clustering)))
+rownames(down.numbers) <- unique(pgc.chloe$time)
+colnames(down.numbers) <- unique(myc.spinal$new_clustering)
+
+
+for(tum.clust in unique(myc.spinal$new_clustering)){
+  for(time in unique(pgc.chloe$time)){
+    markers <- FindMarkers(tum_pgc, ident.1 = tum.clust, ident.2 = time, test.use = "MAST")
+    markers <- markers[markers$p_val_adj < 0.05, ]
+    markers <- markers[!is.na(markers$p_val_adj), ]
+    WriteXLS(markers, ExcelFileName = paste0("DE_MYC_SPIN_clust", tum.clust, "vsPGC_", time, ".xlsx"), row.names = T)
+    up <- sum(markers$avg_logFC >0)
+    down <- sum(markers$avg_logFC <0)
+    up.numbers[rownames(up.numbers) == time, colnames(up.numbers) == tum.clust] <- up
+    down.numbers[rownames(down.numbers) == time, colnames(down.numbers) == tum.clust] <- down
+  }
+}
+
+up.numbers <- as.data.frame(up.numbers, row.names = rownames(up.numbers))
+down.numbers <- as.data.frame(down.numbers, row.names = rownames(down.numbers))
+WriteXLS(up.numbers, ExcelFileName = paste0("MYC_SPINvsChloe_upregulated_Numbers.xlsx"), row.names = T)
+WriteXLS(down.numbers, ExcelFileName = paste0("MYC_SPINvsChloe_downregulated_Numbers.xlsx"), row.names = T)
+```
+
+
+
+# Monocle trajectory PGCs + MYC
+
+```{r dsno}
+gene_module_df_list <- list()
+
+for(i in 1:length(myc.list)){
+  pgc.mar.data <- GetAssayData(pgc.marioni, slot = "data")
+  pgc.chloe.data <- GetAssayData(pgc.chloe, slot = "data")
+  
+  subgroup <- names(myc.list[i])
+  myc.data <- GetAssayData(myc.list[[i]], slot = "data")
+  
+  # keep only intersecting genes
+  genes.intersecting <- intersect(rownames(pgc.mar.data), rownames(pgc.chloe.data))
+  genes.intersecting <- intersect(genes.intersecting, rownames(myc.data))
+
+  pgc.mar.data <- pgc.mar.data[genes.intersecting,]
+  pgc.chloe.data <- pgc.chloe.data[genes.intersecting,]
+  myc.data <- myc.data[genes.intersecting,]
+
+  merged.data <- cbind(pgc.mar.data, pgc.chloe.data)
+  merged.data <- cbind(merged.data, myc.data)
+
+  cell.metadata <- data.frame(orig_id = c(rep("PGCs_marioni", ncol(pgc.mar.data)), as.character(pgc.chloe$orig), rep(subgroup, ncol(myc.data))),
+                              batch = c(as.character(pgc.marioni$batch), as.character(pgc.chloe$batch), as.character(myc.list[[i]]$batch)),
+                              time_point = c(as.character(pgc.marioni$time), as.character(pgc.chloe$time),
+                                             rep(NA, ncol(myc.data))), 
+                              seu_cluster = c(rep(NA, ncol(pgc.mar.data)), rep(NA, ncol(pgc.chloe.data)),
+                                  as.character(myc.list[[i]]$new_clustering)), row.names = colnames(merged.data))
+
+  gene.metadata <- data.frame(gene_short_name = rownames(merged.data), row.names = rownames(merged.data))
+
+  # Make the CDS object
+  cds <- new_cell_data_set(merged.data, cell_metadata = cell.metadata, gene_metadata = gene.metadata)
+
+  # Preprocessing
+  cds <- preprocess_cds(cds, num_dim = 100, norm_method = "none", method = "PCA")
+  cds <- align_cds(cds, alignment_group = "orig_id")
+                 
+  # Dimensionality reduction and trajectories
+
+  cds <- reduce_dimension(cds, reduction_method = "UMAP")
+  tiff(paste0("MONOCLE", subgroup, "_PGC_umap.tiff"), width = 700, height = 600)
+  plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "orig_id", cell_size = 1.5, 
+           group_label_size = 7)
+  dev.off()
+
+  cds <- cluster_cells(cds)
+  cds <- learn_graph(cds)
+
+  tiff(paste0("MONOCLE",subgroup,"_PGC_umap_graph.tiff"), width = 700, height = 600)
+  plot_cells(cds,
+             color_cells_by = "orig_id",
+             label_groups_by_cluster=FALSE,
+             label_leaves=FALSE,
+             label_branch_points=FALSE, cell_size = 1.5, 
+             group_label_size = 7)
+  dev.off()
+
+  tiff(paste0("MONOCLE",subgroup,"_PGC_umap_graph_time.tiff"), width = 700, height = 600)
+  plot_cells(cds,
+             color_cells_by = "time_point",
+             label_groups_by_cluster=FALSE,
+             label_leaves=FALSE,
+             label_branch_points=FALSE, cell_size = 1.5, 
+             group_label_size = 7)
+  dev.off()
+
+  tiff(paste0("MONOCLE",subgroup,"_PGC_umap_graph_clusters.tiff"), width = 700, height = 600)
+  plot_cells(cds,
+             color_cells_by = "seu_cluster",
+             label_groups_by_cluster=FALSE,
+             label_leaves=FALSE,
+             label_branch_points=FALSE, cell_size = 1.5, 
+             group_label_size = 7)
+  dev.off()
+
+  cds <- order_cells(cds, root_cells = na.omit(rownames(cell.metadata)[cell.metadata$time_point == "E7"]))
+
+  tiff(paste0("MONOCLE",subgroup,"_PGC_umap_graph_pseudotime.tiff"), width = 700, height = 600)
+  plot_cells(cds,
+             color_cells_by = "pseudotime",
+             label_cell_groups=FALSE,
+             label_leaves=FALSE,
+             label_branch_points=FALSE,
+             cell_size = 1.5, 
+             group_label_size = 7)
+  dev.off()
+
+
+  # # Finding genes differentially expressed in pseudotime
+  # cds_test_res <- graph_test(cds, neighbor_graph="principal_graph", cores=4)
+  # deg_ids <- row.names(subset(cds_test_res, q_value < 0.05))
+  # 
+  # # grouping genes in modules of co-expression
+  # gene_module_df <- find_gene_modules(cds[deg_ids,])
+  # gene_module_df_list[[subgroup]] <- gene_module_df
+  # 
+  # cell_group_df <- tibble::tibble(cell=row.names(colData(cds)), 
+  #                                 cell_group=colData(cds)$orig_id)
+  # agg_mat <- aggregate_gene_expression(cds, gene_module_df, cell_group_df)
+  # row.names(agg_mat) <- stringr::str_c("Module ", row.names(agg_mat))
+  # 
+  # tiff(paste0("MONOCLE",subgroup, "_heatmap_gene_modules.tiff"), width = 500, height = 600)
+  # pheatmap::pheatmap(agg_mat,
+  #                    scale="column", clustering_method="ward.D2")
+  # dev.off()
+  # 
+  # tiff(paste0("MONOCLE",subgroup, "_gene_modules_umap.tiff"), width = 900, height = 700)
+  # plot_cells(cds,
+  #            genes=gene_module_df,
+  #            label_cell_groups=FALSE,
+  #            show_trajectory_graph=FALSE,
+  #            cell_size = 1.2, 
+  #            group_label_size = 7)
+  # dev.off()
+
+
+}
+
 
 ```
 
@@ -191,6 +875,32 @@ plot_cells(cds,
 dev.off()
 
 
+# # Finding genes differentially expressed in pseudotime
+# cds_test_res <- graph_test(cds, neighbor_graph="principal_graph", cores=4)
+# deg_ids <- row.names(subset(cds_test_res, q_value < 0.05))
+# 
+# # grouping genes in modules of co-expression
+# gene_module_df <- find_gene_modules(cds[deg_ids,])
+# gene_module_df_list[[subgroup]] <- gene_module_df
+# 
+# cell_group_df <- tibble::tibble(cell=row.names(colData(cds)), 
+#                                 cell_group=colData(cds)$orig_id)
+# agg_mat <- aggregate_gene_expression(cds, gene_module_df, cell_group_df)
+# row.names(agg_mat) <- stringr::str_c("Module ", row.names(agg_mat))
+# 
+# tiff(paste0("MONOCLE",subgroup, "_heatmap_gene_modules.tiff"), width = 500, height = 600)
+# pheatmap::pheatmap(agg_mat,
+#                    scale="column", clustering_method="ward.D2")
+# dev.off()
+# 
+# tiff(paste0("MONOCLE",subgroup, "_gene_modules_umap.tiff"), width = 900, height = 700)
+# plot_cells(cds,
+#            genes=gene_module_df,
+#            label_cell_groups=FALSE,
+#            show_trajectory_graph=FALSE,
+#            cell_size = 1.2, 
+#            group_label_size = 7)
+# dev.off()
 
 # Transfer UMAP coordinated to seurat object
 seu.pgcs <- merge(pgc.marioni, pgc.chloe)

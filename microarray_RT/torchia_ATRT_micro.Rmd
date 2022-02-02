@@ -1,0 +1,256 @@
+---
+title: "Torchia ATRT microarray"
+author: "Marta Interlandi"
+date: "07.06.2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup_environment, message=FALSE, warning=FALSE}
+library(GEOquery)
+library(oligo)
+library(oligoClasses)
+library(biomaRt)
+library(reshape2)
+library(limma)
+library(xlsx)
+library(calibrate)
+library(a4Base)
+library(genefilter)
+library(sva)
+library(hyperSpec)
+library(pheatmap)
+library(fpc)
+library(cluster)
+library(dendextend)
+library(schoolmath)
+library(lava)
+library(readxl)
+library(ggsignif)
+library(Rtsne)
+library(RColorBrewer)
+library(survival)
+library(survminer)
+library(maxstat)
+library(plyr)
+library(illuminaio)
+library(beadarray)
+library(illuminaHumanv3.db)
+library(illuminaHumanv2.db)
+library(illuminaHumanv4.db)
+library(tibble)
+
+setwd("/home/microarray/Torchia")
+
+
+load("/home/microarray/Torchia/workspace.RData")
+
+```
+
+
+
+# Reading raw idat files
+
+```{r idat}
+idatFile1 <- list.files(path = "/home/EGA_download_client_2.2.2_1/EGA_download_client_2.2.2/Torchia/EGAD00010001546", full.names = T, pattern = "*.idat")
+
+idatFile2 <- list.files(path = "/home/EGA_download_client_2.2.2_1/EGA_download_client_2.2.2/Torchia/EGAD00010000789", full.names = T, pattern = "*.idat")
+
+idatFile3 <- list.files(path = "/home/EGA_download_client_2.2.2_1/EGA_download_client_2.2.2/Torchia/EGAD00010000790", full.names = T, pattern = "*.idat")
+
+idat <- readIdatFiles(idatFiles = c(idatFile1, idatFile2, idatFile3))
+bead.eset <- normaliseIllumina(BSData = idat, method = "quantile", transform = "log2") 
+dim(bead.eset)
+
+rownames(bead.eset)
+pData(bead.eset)
+
+tab.names <- read.csv("/home/EGA_download_client_2.2.2_1/EGA_download_client_2.2.2/Torchia/Torchia_EGA_mapping.csv")
+tab.names$filename <- sub("_Grn.idat", "", tab.names$filename)
+names <- as.character(tab.names[match(rownames(pData(bead.eset)), tab.names$filename), "T_id"])
+
+bead.eset <- bead.eset[, -which(is.na(names))]
+dim(bead.eset)
+
+names <- names[-which(is.na(names))]
+
+pData(bead.eset)[,1] <- names
+rownames(pData(bead.eset)) <- names
+
+eset.exprs <- as.data.frame(exprs(bead.eset)) #get exprs
+colnames(eset.exprs) <- names
+
+#remove inf values if any.
+sum(is.na(eset.exprs))
+is.na(eset.exprs) <- do.call(cbind,lapply(eset.exprs, is.infinite)) 
+eset.exprs <- as.matrix(eset.exprs[complete.cases(eset.exprs),])
+sum(is.na(eset.exprs))
+
+phenoData <- new(Class = 'AnnotatedDataFrame', data = pData(bead.eset)) # create new pData
+
+#create new expressionSet object
+eset <- ExpressionSet(assayData = as.matrix(eset.exprs), phenoData = phenoData, annotation = 'Humanv4') 
+
+#add other features from IlluminaV4 pacakge.
+eset <- addFeatureData(eset, toAdd = c("SYMBOL", "PROBEQUALITY", "CODINGZONE", "PROBESEQUENCE", "GENOMICLOCATION")) 
+
+fData(eset)
+
+exprs.df <- cbind(exprs(eset),as(eset@featureData,Class = 'data.frame'))
+exprs.df <- exprs.df[,-grep(pattern = 'Row.names',x = colnames(exprs.df))]
+
+
+# keep only probes that have a symbol
+
+collapseByMean <- function(eset, rowid){
+  
+  #remove unmapped probe sets
+  genes<-fData(eset)[, rowid]
+  rows.mapped<-!is.na(genes) & genes != ""
+  eset<-eset[rows.mapped,]
+  genes<-fData(eset)[, rowid]
+  
+  #collapse by median value among duplicate probes
+  df<-data.frame(exprs(eset), genes = genes)
+  df.melt<-melt(df, id.vars = "genes")
+  df.mean.collapsed<-dcast(df.melt, genes ~ variable, mean)
+  
+  #reassemble collapsed eset
+  fdat<-fData(eset)
+  fdat.collapsed<-fdat[!duplicated(fdat[, rowid]), ] #keep first rows of duplicated fData entries
+  row.order<-match(fdat.collapsed[, rowid], df.mean.collapsed$genes)
+  df.mean.collapsed <-df.mean.collapsed[row.order,]
+  rownames(df.mean.collapsed) <- fdat.collapsed[, rowid]
+  rownames(fdat.collapsed)<- fdat.collapsed[, rowid]
+  #fData(eset)<-fdat.collapsed
+  #exprs(eset)<-as.matrix(df.median.collapsed[, colnames(eset)])
+  new_eset <- ExpressionSet(assayData = as.matrix(df.mean.collapsed[, colnames(eset)]), featureData =       as(fdat.collapsed, "AnnotatedDataFrame"))
+  return(new_eset)
+  
+}
+
+combinedDB <- collapseByMean(eset, "SYMBOL")
+dim(combinedDB)
+boxplot(combinedDB[,40:51])
+
+pData(combinedDB)
+```
+
+
+
+
+
+
+
+## Adding metadata info
+
+
+```{r read_hum, results="hide"}
+metadata <- read_excel("/home/EGA_download_client_2.2.2_1/EGA_download_client_2.2.2/Torchia/Supplements_Torchia et al_Cancer.xlsx", skip = 3)
+
+#### Creating pdata
+subgroup <- unlist(metadata[match(colnames(combinedDB), metadata$Sample), "Subgroup (GEP)"])
+names(subgroup) <- colnames(combinedDB)
+
+combinedDB$subgroup <- subgroup
+
+combinedDB <- combinedDB[, -(which(is.na(combinedDB$subgroup)))]
+dim(combinedDB)
+
+subgroup <- pData(combinedDB)[, "subgroup"]
+subgroup <- mapvalues(subgroup, from = c("1", "2", "3"), to = c("SHH", "TYR", "MYC"))
+combinedDB$sub.name <- subgroup
+
+
+```
+
+
+
+
+### COO plot PGC predictors
+
+
+```{r cnsuifghsd}
+pgc.list <- read_excel("/home/scRNAseq_Ranalysis/Seurat_v3/humATRT_Kleinman/List for marta_subgroup specific genes_PGC marker.xlsx")
+
+pgc.pred <- pgc.list$`PGC predictors (Network)`
+pgc.pred <- toupper(pgc.pred)
+pgc.pred <- pgc.pred[pgc.pred %in% rownames(combinedDB)]
+
+pgc.hum <- pgc.list$humanPGCs
+pgc.hum <- toupper(pgc.hum)
+pgc.hum <- pgc.hum[pgc.hum %in% rownames(combinedDB)]
+
+pgc.all <- unique(c(pgc.pred, pgc.hum))
+
+annotation <- data.frame(subgroup = combinedDB$sub.name, row.names = colnames(combinedDB))
+
+# Heatmap
+  ann_colors = list(
+    subgroup = c("SHH" = "#274393", "TYR" = "#CC151C", "MYC" = "#1D6E30")
+  )
+
+
+
+
+pheatmap(exprs(combinedDB[pgc.all,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "correlation", clustering_method = "ward.D2", filename = "./COO/COO_PGC_all_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+pgc.selected <- read_excel("./PGC_selected_mark_torchia.xlsx")
+pgc.selected <- pgc.selected$pgc_markers
+
+pheatmap(exprs(combinedDB[pgc.selected,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "correlation", clustering_method = "ward.D2", filename = "./COO/COO_PGC_selected_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+midhind.net <- pgc.list$`MidHindbrain predictors (Network)`
+midhind.net <- toupper(midhind.net)
+midhind.net <- unique(midhind.net[midhind.net %in% rownames(combinedDB)])
+
+m <- c(pgc.selected, midhind.net)
+pheatmap(exprs(combinedDB[m,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "correlation", clustering_method = "ward.D2", filename = "./COO/COO_PGC_midHind_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+
+pheatmap(exprs(combinedDB[midhind.net,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "correlation", clustering_method = "ward.D2", filename = "./COO/COO_midHind_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+
+
+mark.selected <- read_excel("./selected_pgc_midhind.xlsx")
+mark.selected <- mark.selected$gene
+
+pheatmap(exprs(combinedDB[mark.selected,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "ward.D2", filename = "./COO/COO_PGCmidHind_selected_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+# excluding outlier samples 
+pheatmap(exprs(combinedDB[mark.selected, !(colnames(combinedDB) %in% c("T17", "T34", "T16", "T18"))]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "ward.D2", filename = "./COO/COO_PGCmidHind_selected_heatmap_noOutliers_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+
+mark.selected.moni <- read_excel("/home/microarray/Natalia/revisionCOO/pgc_predictors_Moni.xlsx")
+mark.selected.moni <- mark.selected.moni$genes
+
+pheatmap(exprs(combinedDB[mark.selected.moni,]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "ward.D2", filename = "./COO/COO_PGC_MONIselected_heatmap_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+pheatmap(exprs(combinedDB[mark.selected.moni,!(colnames(combinedDB) %in% c("T17", "T34", "T16", "T18"))]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "ward.D2", filename = "./COO/COO_PGC_MONIselected_heatmap_noOutliers_Torchia.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+
+## Adding three genes requested by the reviewers
+mark.selected.moni <- read_excel("/home/microarray/Natalia/revisionCOO/pgc_predictors_Moni.xlsx")
+mark.selected.moni <- mark.selected.moni$genes
+mark.selected.moni %in% rownames(exprs(combinedDB))
+
+## FGF15 is not found!!
+pheatmap(exprs(combinedDB[mark.selected.moni,!(colnames(combinedDB) %in% c("T17", "T34", "T16", "T18"))]), scale = "row", color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdBu")))(100), cluster_rows = T, cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "ward.D2", filename = "./COO/COO_PGC_MONIselected_heatmap_noOutliers_Torchia_plus2genes.tiff", legend = T, annotation_col = annotation, annotation_legend = T, show_rownames = T, show_colnames = T, width = 16, height = 10, annotation_colors = ann_colors)
+
+
+
+write.xlsx(exprs(combinedDB[mark.selected.moni,!(colnames(combinedDB) %in% c("T17", "T34", "T16", "T18"))]), file = "../Natalia/revisionCOO/source_data/SupplFig9C_heatPred.xlsx")
+
+```
